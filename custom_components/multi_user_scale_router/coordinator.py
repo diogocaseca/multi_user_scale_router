@@ -31,9 +31,7 @@ from .const import (
     DEFAULT_MIN_TOLERANCE_KG,
     DOMAIN,
     MAX_PENDING_MEASUREMENTS,
-
     CONF_SETTLING_DELAY,
-
 )
 from multi_user_scale_core import (
     MeasurementCandidate,
@@ -233,7 +231,7 @@ class RouterRuntime:
 
         self.source_entity_id = self.entry_data[CONF_SOURCE_ENTITY_ID]
         self.settling_delay = self.entry_data.get(CONF_SETTLING_DELAY, 2.0)
-        
+
         self.tracked_entities: list[str] = []
         self.tracked_attributes: set[str] = set()
 
@@ -515,7 +513,7 @@ class RouterRuntime:
         time_str = self._format_time_part(localized, time_format, False)
         if time_str is not None:
             return time_str
-            
+
         return localized.strftime("%H:%M")
 
     @property
@@ -859,7 +857,9 @@ class RouterRuntime:
 
         pending = self._pending_measurements[measurement_id]
         device_reg = dr.async_get(self.hass)
-        device_entry = device_reg.async_get_device(identifiers={(DOMAIN, self.entry_id)})
+        device_entry = device_reg.async_get_device(
+            identifiers={(DOMAIN, self.entry_id)}
+        )
         device_id = device_entry.id if device_entry else "unknown"
 
         candidate_lines = []
@@ -1077,9 +1077,11 @@ class RouterRuntime:
         )
 
     @callback
-    def _async_capture_and_route(self, weight_state: Any, weight_kg: float, unit: str) -> None:
+    def _async_capture_and_route(
+        self, weight_state: Any, weight_kg: float, unit: str
+    ) -> None:
         self._async_capture_cancel = None
-        
+
         raw_data = {
             "source_state": weight_state.state,
             "source_attributed_unit": unit,
@@ -1090,7 +1092,12 @@ class RouterRuntime:
         if self.tracked_entities:
             for entity_id in self.tracked_entities:
                 entity_state = self.hass.states.get(entity_id)
-                if entity_state is None or entity_state.state in {"unavailable", "unknown", "none", "None"}:
+                if entity_state is None or entity_state.state in {
+                    "unavailable",
+                    "unknown",
+                    "none",
+                    "None",
+                }:
                     continue
                 raw_data["tracked_entities"][entity_id] = {
                     "state": entity_state.state,

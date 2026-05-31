@@ -144,7 +144,9 @@ def _source_sensor_options(hass) -> list[selector.SelectOptionDict]:
     return [option for _score, option in options]
 
 
-def _metric_options(hass, source_entity_id: str | None) -> list[selector.SelectOptionDict]:
+def _metric_options(
+    hass, source_entity_id: str | None
+) -> list[selector.SelectOptionDict]:
     options: list[selector.SelectOptionDict] = []
     if not source_entity_id:
         return options
@@ -154,9 +156,15 @@ def _metric_options(hass, source_entity_id: str | None) -> list[selector.SelectO
     if state:
         for key in state.attributes.keys():
             key_lower = key.lower()
-            if key_lower not in SYSTEM_ATTRIBUTES and "history" not in key_lower and "list" not in key_lower:
+            if (
+                key_lower not in SYSTEM_ATTRIBUTES
+                and "history" not in key_lower
+                and "list" not in key_lower
+            ):
                 label = key.replace("_", " ").title()
-                options.append(selector.SelectOptionDict(value=key, label=f"{label} (Attribute)"))
+                options.append(
+                    selector.SelectOptionDict(value=key, label=f"{label} (Attribute)")
+                )
 
     # 2. Add sibling sensor entities from the same device
     registry = er.async_get(hass)
@@ -167,18 +175,29 @@ def _metric_options(hass, source_entity_id: str | None) -> list[selector.SelectO
                 entry.device_id == registry_entry.device_id
                 and entry.domain == "sensor"
                 and getattr(entry, "entity_category", None) is None
-                and getattr(entry, "original_device_class", None) not in ("battery", "signal_strength", "timestamp", "update")
+                and getattr(entry, "original_device_class", None)
+                not in ("battery", "signal_strength", "timestamp", "update")
                 and entry.entity_id != source_entity_id
             ):
                 entity_state = hass.states.get(entry.entity_id)
-                name = entry.original_name or entry.name or entry.entity_id.split(".")[-1].replace("_", " ").title()
+                name = (
+                    entry.original_name
+                    or entry.name
+                    or entry.entity_id.split(".")[-1].replace("_", " ").title()
+                )
                 if entity_state and "friendly_name" in entity_state.attributes:
                     name = entity_state.attributes["friendly_name"]
-                options.append(selector.SelectOptionDict(value=entry.entity_id, label=f"{name} (Entity)"))
+                options.append(
+                    selector.SelectOptionDict(
+                        value=entry.entity_id, label=f"{name} (Entity)"
+                    )
+                )
 
     if not options:
-        options.append(selector.SelectOptionDict(value="none", label="No metrics available"))
-        
+        options.append(
+            selector.SelectOptionDict(value="none", label="No metrics available")
+        )
+
     options.sort(key=lambda x: x["label"].lower())
     return options
 
@@ -304,7 +323,9 @@ class ScaleRouterConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 {
                     CONF_SOURCE_ENTITY_ID: user_input[CONF_SOURCE_ENTITY_ID],
                     CONF_TRACKED_METRICS: user_input.get(CONF_TRACKED_METRICS, []),
-                    CONF_SETTLING_DELAY: user_input.get(CONF_SETTLING_DELAY, DEFAULT_SETTLING_DELAY),
+                    CONF_SETTLING_DELAY: user_input.get(
+                        CONF_SETTLING_DELAY, DEFAULT_SETTLING_DELAY
+                    ),
                     CONF_HISTORY_RETENTION_DAYS: user_input[
                         CONF_HISTORY_RETENTION_DAYS
                     ],
@@ -366,7 +387,9 @@ class ScaleRouterConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 "users": updated_users,
                 CONF_SOURCE_ENTITY_ID: self.context[CONF_SOURCE_ENTITY_ID],
                 CONF_TRACKED_METRICS: self.context.get(CONF_TRACKED_METRICS, []),
-                CONF_SETTLING_DELAY: self.context.get(CONF_SETTLING_DELAY, DEFAULT_SETTLING_DELAY),
+                CONF_SETTLING_DELAY: self.context.get(
+                    CONF_SETTLING_DELAY, DEFAULT_SETTLING_DELAY
+                ),
                 CONF_HISTORY_RETENTION_DAYS: self.context[CONF_HISTORY_RETENTION_DAYS],
                 CONF_MAX_HISTORY_SIZE: self.context[CONF_MAX_HISTORY_SIZE],
             }
@@ -393,7 +416,9 @@ class ScaleRouterConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             CONF_SOURCE_ENTITY_ID,
             sensor_options[0]["value"] if sensor_options else None,
         )
-        tracked_metrics_default = _get_tracked_metrics_default(self.hass, defaults, default_source)
+        tracked_metrics_default = _get_tracked_metrics_default(
+            self.hass, defaults, default_source
+        )
 
         return vol.Schema(
             {
@@ -663,7 +688,9 @@ class ScaleRouterOptionsFlow(OptionsFlow):
                 **{
                     CONF_SOURCE_ENTITY_ID: user_input[CONF_SOURCE_ENTITY_ID],
                     CONF_TRACKED_METRICS: user_input.get(CONF_TRACKED_METRICS, []),
-                    CONF_SETTLING_DELAY: user_input.get(CONF_SETTLING_DELAY, DEFAULT_SETTLING_DELAY),
+                    CONF_SETTLING_DELAY: user_input.get(
+                        CONF_SETTLING_DELAY, DEFAULT_SETTLING_DELAY
+                    ),
                     CONF_HISTORY_RETENTION_DAYS: user_input[
                         CONF_HISTORY_RETENTION_DAYS
                     ],
@@ -726,7 +753,9 @@ class ScaleRouterOptionsFlow(OptionsFlow):
             CONF_SOURCE_ENTITY_ID,
             sensor_options[0]["value"] if sensor_options else None,
         )
-        tracked_metrics_default = _get_tracked_metrics_default(self.hass, defaults, default_source)
+        tracked_metrics_default = _get_tracked_metrics_default(
+            self.hass, defaults, default_source
+        )
 
         return vol.Schema(
             {

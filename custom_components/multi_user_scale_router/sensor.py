@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
+from homeassistant.components.sensor import (
+    SensorDeviceClass,
+    SensorEntity,
+    SensorStateClass,
+)
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import EntityCategory
@@ -76,12 +80,12 @@ class RouterUserWeightSensor(SensorEntity):
             weight_history.append(display_measurement)
 
         attrs = {"weight_history": weight_history}
-        
+
         measurement = self._runtime.router.get_user_last_measurement(self._user_id)
         if measurement is not None:
             attrs["measurement_id"] = measurement.measurement_id
             attrs["source_entity_id"] = self._runtime.source_entity_id
-            
+
         return attrs
 
     async def async_will_remove_from_hass(self) -> None:
@@ -186,33 +190,49 @@ class RouterUserTrackedEntitySensor(SensorEntity):
     _attr_has_entity_name = True
     _attr_force_update = True
 
-    def __init__(self, runtime: Any, user_id: str, display_name: str, source_entity_id: str) -> None:
+    def __init__(
+        self, runtime: Any, user_id: str, display_name: str, source_entity_id: str
+    ) -> None:
         self._runtime = runtime
         self._user_id = user_id
         self._source_entity_id = source_entity_id
-        
+
         state = runtime.hass.states.get(source_entity_id)
-        
+
         name = source_entity_id.split(".")[-1].replace("_", " ").title()
-        
+
         from homeassistant.helpers import entity_registry as er
+
         registry = er.async_get(runtime.hass)
         registry_entry = registry.async_get(source_entity_id)
         if registry_entry:
             name = registry_entry.name or registry_entry.original_name or name
-            self._attr_device_class = registry_entry.device_class or registry_entry.original_device_class
+            self._attr_device_class = (
+                registry_entry.device_class or registry_entry.original_device_class
+            )
             self._attr_native_unit_of_measurement = registry_entry.unit_of_measurement
             self._attr_icon = registry_entry.icon or registry_entry.original_icon
-            
+
         if state:
             name = state.attributes.get("friendly_name", name)
-            self._attr_native_unit_of_measurement = state.attributes.get("unit_of_measurement", getattr(self, "_attr_native_unit_of_measurement", None))
-            self._attr_device_class = state.attributes.get("device_class", getattr(self, "_attr_device_class", None))
+            self._attr_native_unit_of_measurement = state.attributes.get(
+                "unit_of_measurement",
+                getattr(self, "_attr_native_unit_of_measurement", None),
+            )
+            self._attr_device_class = state.attributes.get(
+                "device_class", getattr(self, "_attr_device_class", None)
+            )
             self._attr_state_class = state.attributes.get("state_class")
-            self._attr_icon = state.attributes.get("icon", getattr(self, "_attr_icon", None))
+            self._attr_icon = state.attributes.get(
+                "icon", getattr(self, "_attr_icon", None)
+            )
 
         # Fallback to prevent device_class/unit mismatch warnings on startup if unit is missing
-        if getattr(self, "_attr_device_class", None) == SensorDeviceClass.WEIGHT and not getattr(self, "_attr_native_unit_of_measurement", None):
+        if getattr(
+            self, "_attr_device_class", None
+        ) == SensorDeviceClass.WEIGHT and not getattr(
+            self, "_attr_native_unit_of_measurement", None
+        ):
             self._attr_native_unit_of_measurement = "kg"
 
         # state_class is not stored in the entity registry, so if the source entity
@@ -223,7 +243,9 @@ class RouterUserTrackedEntitySensor(SensorEntity):
             self._attr_state_class = SensorStateClass.MEASUREMENT
 
         self._attr_name = f"{display_name}'s {name}"
-        self._attr_unique_id = f"{runtime.entry_id}_{user_id}_{source_entity_id.replace('.', '_')}"
+        self._attr_unique_id = (
+            f"{runtime.entry_id}_{user_id}_{source_entity_id.replace('.', '_')}"
+        )
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, runtime.entry_id)},
             name=runtime.title,
@@ -266,11 +288,13 @@ class RouterUserTrackedAttributeSensor(SensorEntity):
     _attr_has_entity_name = True
     _attr_force_update = True
 
-    def __init__(self, runtime: Any, user_id: str, display_name: str, attribute_key: str) -> None:
+    def __init__(
+        self, runtime: Any, user_id: str, display_name: str, attribute_key: str
+    ) -> None:
         self._runtime = runtime
         self._user_id = user_id
         self._attribute_key = attribute_key
-        
+
         name = attribute_key.replace("_", " ").title()
         self._attr_name = f"{display_name}'s {name}"
         self._attr_unique_id = f"{runtime.entry_id}_{user_id}_attr_{attribute_key}"
@@ -292,10 +316,14 @@ class RouterUserTrackedAttributeSensor(SensorEntity):
             self._attr_device_class = SensorDeviceClass.WEIGHT
             source_state = runtime.hass.states.get(runtime.source_entity_id)
             if source_state:
-                self._attr_native_unit_of_measurement = source_state.attributes.get("unit_of_measurement", "kg")
+                self._attr_native_unit_of_measurement = source_state.attributes.get(
+                    "unit_of_measurement", "kg"
+                )
             else:
                 self._attr_native_unit_of_measurement = "kg"
-        elif any(x in key_lower for x in ["percent", "percentage", "fat", "water", "protein"]):
+        elif any(
+            x in key_lower for x in ["percent", "percentage", "fat", "water", "protein"]
+        ):
             self._attr_native_unit_of_measurement = "%"
         elif "metabolic" in key_lower or "bmr" in key_lower:
             self._attr_native_unit_of_measurement = "kcal"
@@ -371,13 +399,17 @@ async def async_setup_entry(
         )
         for entity_id in runtime.tracked_entities:
             entities.append(
-                RouterUserTrackedEntitySensor(runtime, user.user_id, user.display_name, entity_id)
+                RouterUserTrackedEntitySensor(
+                    runtime, user.user_id, user.display_name, entity_id
+                )
             )
         for attr_key in discovered_attributes:
             if "history" in attr_key.lower() or "list" in attr_key.lower():
                 continue
             entities.append(
-                RouterUserTrackedAttributeSensor(runtime, user.user_id, user.display_name, attr_key)
+                RouterUserTrackedAttributeSensor(
+                    runtime, user.user_id, user.display_name, attr_key
+                )
             )
 
     async_add_entities(entities)
