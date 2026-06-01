@@ -153,9 +153,7 @@ def _safe_float(value: Any) -> float | None:
         return None
 
 
-def _describe_state_for_log(
-    entity_id: str, state: Any, now: datetime
-) -> str:
+def _describe_state_for_log(entity_id: str, state: Any, now: datetime) -> str:
     """Render an entity state as a one-line diagnostic string.
 
     Includes the raw state, attributes, and last_changed/last_updated with
@@ -1112,9 +1110,7 @@ class RouterRuntime:
             f"{weight_kg:.2f}",
             unit,
             self.settling_delay,
-            _describe_state_for_log(
-                self.source_entity_id, new_state, dt_util.utcnow()
-            ),
+            _describe_state_for_log(self.source_entity_id, new_state, dt_util.utcnow()),
         )
 
         if self._async_capture_cancel:
