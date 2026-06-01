@@ -32,6 +32,7 @@ from .const import (
     DOMAIN,
     MAX_PENDING_MEASUREMENTS,
     CONF_SETTLING_DELAY,
+    SYSTEM_ATTRIBUTES,
 )
 from multi_user_scale_core import (
     MeasurementCandidate,
@@ -150,6 +151,46 @@ def _safe_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _describe_state_for_log(
+    entity_id: str, state: Any, now: datetime
+) -> str:
+    """Render an entity state as a one-line diagnostic string.
+
+    Includes the raw state, attributes, and last_changed/last_updated with
+    their age relative to ``now`` (the capture instant). The age is what makes
+    the log readable: a tracked metric whose value is older than the weigh-in
+    that triggered the capture shows up immediately as a large age.
+
+    System/noise attributes (``SYSTEM_ATTRIBUTES`` — friendly_name, icon, rssi,
+    battery, etc.) are filtered out so only meaningful metric attributes remain.
+    ``last_changed``/``last_updated`` are State properties, not attributes, so
+    they are always logged regardless of this filter.
+    """
+    if state is None:
+        return f"{entity_id}=<missing from state machine>"
+
+    def _age(ts: Any) -> str:
+        if not isinstance(ts, datetime):
+            return "n/a"
+        return f"{(now - ts).total_seconds():.1f}s ago"
+
+    last_changed = getattr(state, "last_changed", None)
+    last_updated = getattr(state, "last_updated", None)
+    attributes = {
+        key: value
+        for key, value in (getattr(state, "attributes", {}) or {}).items()
+        if key.lower() not in SYSTEM_ATTRIBUTES
+    }
+    return (
+        f"{entity_id}: state={state.state!r} "
+        f"last_changed={last_changed.isoformat() if isinstance(last_changed, datetime) else 'n/a'} "
+        f"({_age(last_changed)}) "
+        f"last_updated={last_updated.isoformat() if isinstance(last_updated, datetime) else 'n/a'} "
+        f"({_age(last_updated)}) "
+        f"attributes={attributes}"
+    )
 
 
 class RouterRuntime:
@@ -1063,6 +1104,19 @@ class RouterRuntime:
             )
             return
 
+        _LOGGER.debug(
+            "Source update accepted for %s: %s -> %s kg (unit=%s); "
+            "scheduling capture in %.1fs. Source %s",
+            self.source_entity_id,
+            f"{old_weight_kg:.2f}" if old_weight_kg is not None else "None",
+            f"{weight_kg:.2f}",
+            unit,
+            self.settling_delay,
+            _describe_state_for_log(
+                self.source_entity_id, new_state, dt_util.utcnow()
+            ),
+        )
+
         if self._async_capture_cancel:
             self._async_capture_cancel()
 
@@ -1082,6 +1136,16 @@ class RouterRuntime:
     ) -> None:
         self._async_capture_cancel = None
 
+        _LOGGER.debug(
+            "Capturing measurement for %s (settling_delay=%.1fs elapsed). "
+            "Weight source (frozen at event time) %s",
+            self.source_entity_id,
+            self.settling_delay,
+            _describe_state_for_log(
+                self.source_entity_id, weight_state, dt_util.utcnow()
+            ),
+        )
+
         raw_data = {
             "source_state": weight_state.state,
             "source_attributed_unit": unit,
@@ -1092,12 +1156,18 @@ class RouterRuntime:
         if self.tracked_entities:
             for entity_id in self.tracked_entities:
                 entity_state = self.hass.states.get(entity_id)
-                if entity_state is None or entity_state.state in {
+                skipped = entity_state is None or entity_state.state in {
                     "unavailable",
                     "unknown",
                     "none",
                     "None",
-                }:
+                }
+                _LOGGER.debug(
+                    "Tracked entity at capture (%s): %s",
+                    "SKIPPED - unavailable/unknown" if skipped else "recorded",
+                    _describe_state_for_log(entity_id, entity_state, dt_util.utcnow()),
+                )
+                if skipped:
                     continue
                 raw_data["tracked_entities"][entity_id] = {
                     "state": entity_state.state,
