@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 from typing import Any
 
@@ -60,6 +60,17 @@ class PendingMeasurement:
     candidate_details: list[dict[str, Any]]
     created_at: datetime
     notified_mobile_services: list[tuple[str, str]] = field(default_factory=list)
+
+
+@dataclass
+class PendingCapture:
+    """Debounced burst of source updates waiting to be captured."""
+
+    selected_state: Any
+    selected_weight_kg: float
+    selected_unit: str
+    selected_timestamp: datetime
+    changed_tracked_attributes: set[str] = field(default_factory=set)
 
 
 def _safe_int(value: Any, default: int, field_name: str) -> int:
@@ -151,6 +162,46 @@ def _safe_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _state_timestamp_utc(state: Any) -> datetime:
+    """Best-effort UTC timestamp for a Home Assistant State object."""
+    for attr in ("last_updated", "last_changed"):
+        value = getattr(state, attr, None)
+        if isinstance(value, datetime):
+            return dt_util.as_utc(value)
+    return dt_util.utcnow()
+
+
+def _state_changed_within(
+    state: Any, window_start: datetime, window_end: datetime
+) -> bool:
+    """Return True when state changed/updated inside a time window."""
+    timestamp = _state_timestamp_utc(state)
+    return window_start <= timestamp <= window_end
+
+
+def _get_changed_tracked_attribute_keys(
+    old_state: Any,
+    new_state: Any,
+    tracked_attributes: set[str],
+) -> set[str]:
+    """Return tracked attribute keys that actually changed in this event."""
+    if not tracked_attributes:
+        return set()
+
+    old_attributes = getattr(old_state, "attributes", {}) or {}
+    new_attributes = getattr(new_state, "attributes", {}) or {}
+
+    changed: set[str] = set()
+    for key, new_value in new_attributes.items():
+        key_lower = str(key).lower()
+        if key_lower not in tracked_attributes:
+            continue
+        if old_attributes.get(key) != new_value:
+            changed.add(key_lower)
+
+    return changed
 
 
 def _describe_state_for_log(entity_id: str, state: Any, now: datetime) -> str:
@@ -281,6 +332,7 @@ class RouterRuntime:
                 self.tracked_attributes.add(metric.lower())
 
         self._async_capture_cancel: Callable[[], None] | None = None
+        self._pending_capture: PendingCapture | None = None
 
     @property
     def title(self) -> str:
@@ -440,6 +492,7 @@ class RouterRuntime:
         if self._async_capture_cancel:
             self._async_capture_cancel()
             self._async_capture_cancel = None
+        self._pending_capture = None
         for measurement_id in list(self._pending_measurements):
             pending = self._pending_measurements.get(measurement_id)
             if (
@@ -1091,6 +1144,25 @@ class RouterRuntime:
         old_weight_kg = (
             _convert_to_kg(old_value, old_unit) if old_value is not None else None
         )
+
+        changed_tracked_attrs = _get_changed_tracked_attribute_keys(
+            old_state, new_state, self.tracked_attributes
+        )
+
+        # Ignore pure duplicate/noise events where neither the weight nor tracked
+        # attributes changed meaningfully.
+        if (
+            old_weight_kg is not None
+            and abs(old_weight_kg - weight_kg) < 0.01
+            and unit == old_unit
+            and not changed_tracked_attrs
+        ):
+            _LOGGER.debug(
+                "Skipping source update for %s: no meaningful weight/attribute change",
+                self.source_entity_id,
+            )
+            return
+
         if (
             old_weight_kg is not None
             and unit != old_unit
@@ -1101,6 +1173,30 @@ class RouterRuntime:
                 self.source_entity_id,
             )
             return
+
+        event_timestamp = _state_timestamp_utc(new_state)
+
+        if self._pending_capture is None:
+            self._pending_capture = PendingCapture(
+                selected_state=new_state,
+                selected_weight_kg=weight_kg,
+                selected_unit=unit,
+                selected_timestamp=event_timestamp,
+                changed_tracked_attributes=set(changed_tracked_attrs),
+            )
+        else:
+            # Keep the heaviest value seen in the current burst. This protects the
+            # real weigh-in from a trailing "step-off" value that can arrive before
+            # settling_delay expires.
+            if weight_kg > (self._pending_capture.selected_weight_kg + 0.01):
+                self._pending_capture.selected_state = new_state
+                self._pending_capture.selected_weight_kg = weight_kg
+                self._pending_capture.selected_unit = unit
+                self._pending_capture.selected_timestamp = event_timestamp
+
+            self._pending_capture.changed_tracked_attributes.update(
+                changed_tracked_attrs
+            )
 
         _LOGGER.debug(
             "Source update accepted for %s: %s -> %s kg (unit=%s); "
@@ -1118,7 +1214,7 @@ class RouterRuntime:
 
         @callback
         def _execute_capture(_now: datetime) -> None:
-            self._async_capture_and_route(new_state, weight_kg, unit)
+            self._async_capture_and_route_pending()
 
         self._async_capture_cancel = async_call_later(
             self.hass,
@@ -1127,10 +1223,35 @@ class RouterRuntime:
         )
 
     @callback
-    def _async_capture_and_route(
-        self, weight_state: Any, weight_kg: float, unit: str
-    ) -> None:
+    def _async_capture_and_route_pending(self) -> None:
+        pending_capture = self._pending_capture
+        self._pending_capture = None
         self._async_capture_cancel = None
+
+        if pending_capture is None:
+            return
+
+        self._async_capture_and_route(
+            pending_capture.selected_state,
+            pending_capture.selected_weight_kg,
+            pending_capture.selected_unit,
+            pending_capture.selected_timestamp,
+            pending_capture.changed_tracked_attributes,
+        )
+
+    @callback
+    def _async_capture_and_route(
+        self,
+        weight_state: Any,
+        weight_kg: float,
+        unit: str,
+        weight_timestamp: datetime,
+        changed_tracked_attributes: set[str],
+    ) -> None:
+        capture_now = dt_util.utcnow()
+        freshness_window_seconds = max(1.0, float(self.settling_delay) + 1.5)
+        freshness_start = weight_timestamp - timedelta(seconds=freshness_window_seconds)
+        freshness_end = capture_now + timedelta(seconds=0.5)
 
         _LOGGER.debug(
             "Capturing measurement for %s (settling_delay=%.1fs elapsed). "
@@ -1152,18 +1273,32 @@ class RouterRuntime:
         if self.tracked_entities:
             for entity_id in self.tracked_entities:
                 entity_state = self.hass.states.get(entity_id)
-                skipped = entity_state is None or entity_state.state in {
+                skipped_unavailable = entity_state is None or entity_state.state in {
                     "unavailable",
                     "unknown",
                     "none",
                     "None",
                 }
+                skipped_stale = (
+                    not skipped_unavailable
+                    and not _state_changed_within(
+                        entity_state,
+                        freshness_start,
+                        freshness_end,
+                    )
+                )
                 _LOGGER.debug(
                     "Tracked entity at capture (%s): %s",
-                    "SKIPPED - unavailable/unknown" if skipped else "recorded",
+                    (
+                        "SKIPPED - unavailable/unknown"
+                        if skipped_unavailable
+                        else "SKIPPED - stale outside freshness window"
+                        if skipped_stale
+                        else "recorded"
+                    ),
                     _describe_state_for_log(entity_id, entity_state, dt_util.utcnow()),
                 )
-                if skipped:
+                if skipped_unavailable or skipped_stale:
                     continue
                 raw_data["tracked_entities"][entity_id] = {
                     "state": entity_state.state,
@@ -1175,11 +1310,13 @@ class RouterRuntime:
                 continue
             if key.lower() not in self.tracked_attributes:
                 continue
+            if key.lower() not in changed_tracked_attributes:
+                continue
             raw_data["tracked_attributes"][key] = val
 
         measurement = WeightMeasurement(
             weight_kg=weight_kg,
-            timestamp=datetime.now(tz=timezone.utc),
+            timestamp=weight_timestamp,
             source_id=self.source_entity_id,
             source_unit=unit,
             raw=raw_data,
