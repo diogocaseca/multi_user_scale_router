@@ -82,3 +82,109 @@ remove_measurement:
       example: "e7e7be2c9bfe4e6fb66bf713bbcb0c74"
       selector:
         text:
+
+move_measurement_component:
+  name: Move measurement component
+  description: Move only a selected component from one user to another. Choose weight to move the whole weight measurement or extra metric to move a single tracked metric.
+  fields:
+    device_id:
+      name: Scale
+      description: The scale router device.
+      required: true
+      selector:
+        device:
+          integration: multi_user_scale_router
+    from_user_id:
+      name: From User ID
+      description: The user ID where the component currently exists.
+      required: true
+      example: "alice"
+      selector:
+        text:
+    to_user_id:
+      name: To User ID
+      description: The user ID that will receive the component.
+      required: true
+      example: "bob"
+      selector:
+        text:
+    component:
+      name: Component
+      description: Select whether to move the full weight measurement or only one extra metric.
+      required: true
+      default: "weight"
+      selector:
+        select:
+          mode: dropdown
+          options:
+            - label: Weight
+              value: "weight"
+            - label: Extra Metric
+              value: "extra_metric"
+    measurement_id:
+      name: Source Measurement ID
+      description: Measurement ID on the source user. If omitted, uses the newest measurement.
+      required: false
+      example: "e7e7be2c9bfe4e6fb66bf713bbcb0c74"
+      selector:
+        text:
+    target_measurement_id:
+      name: Target Measurement ID
+      description: Target measurement on the destination user for extra metric moves. If omitted, uses the newest measurement.
+      required: false
+      example: "f9ab12d4f9cc49d1a8f8e96de4d4f102"
+      selector:
+        text:
+    metric_key:
+      name: Metric Key
+      description: Required when component is extra_metric. Use attribute key (e.g. impedance) or tracked entity_id.
+      required: false
+      example: "impedance"
+      selector:
+        text:
+
+remove_measurement_component:
+  name: Remove measurement component
+  description: Remove only a selected component from a user. Choose weight to delete the whole weight measurement or extra metric to delete a single tracked metric.
+  fields:
+    device_id:
+      name: Scale
+      description: The scale router device.
+      required: true
+      selector:
+        device:
+          integration: multi_user_scale_router
+    user_id:
+      name: User ID
+      description: The user ID to remove the component from.
+      required: true
+      example: "alice"
+      selector:
+        text:
+    component:
+      name: Component
+      description: Select whether to remove the full weight measurement or only one extra metric.
+      required: true
+      default: "weight"
+      selector:
+        select:
+          mode: dropdown
+          options:
+            - label: Weight
+              value: "weight"
+            - label: Extra Metric
+              value: "extra_metric"
+    measurement_id:
+      name: Measurement ID
+      description: Measurement ID to edit. If omitted, uses the newest measurement.
+      required: false
+      example: "e7e7be2c9bfe4e6fb66bf713bbcb0c74"
+      selector:
+        text:
+    metric_key:
+      name: Metric Key
+      description: Required when component is extra_metric. Use attribute key (e.g. impedance) or tracked entity_id.
+      required: false
+      example: "impedance"
+      selector:
+        text:

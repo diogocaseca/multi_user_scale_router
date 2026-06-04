@@ -1107,6 +1107,126 @@ class RouterRuntime:
         self._notify_diagnostic_sensors()
         return removed
 
+    def _select_user_measurement(
+        self,
+        user_id: str,
+        measurement_id: str | None = None,
+    ) -> WeightMeasurement:
+        history = self.router.get_user_history(user_id)
+        if not history:
+            raise MeasurementNotFoundError("No measurements found for user")
+
+        if measurement_id is None:
+            return history[-1]
+
+        for measurement in history:
+            if measurement.measurement_id == measurement_id:
+                return measurement
+
+        raise MeasurementNotFoundError("Measurement not found for user")
+
+    @staticmethod
+    def _ensure_raw_payload(measurement: WeightMeasurement) -> dict[str, Any]:
+        raw = measurement.raw
+        if not isinstance(raw, dict):
+            raw = {}
+            measurement.raw = raw
+
+        tracked_entities = raw.get("tracked_entities")
+        if not isinstance(tracked_entities, dict):
+            tracked_entities = {}
+            raw["tracked_entities"] = tracked_entities
+
+        tracked_attributes = raw.get("tracked_attributes")
+        if not isinstance(tracked_attributes, dict):
+            tracked_attributes = {}
+            raw["tracked_attributes"] = tracked_attributes
+
+        return raw
+
+    @staticmethod
+    def _pop_metric(
+        measurement: WeightMeasurement,
+        metric_key: str,
+    ) -> tuple[str, str, Any]:
+        raw = RouterRuntime._ensure_raw_payload(measurement)
+        tracked_entities = raw["tracked_entities"]
+        tracked_attributes = raw["tracked_attributes"]
+
+        if "." in metric_key:
+            entity_value = tracked_entities.pop(metric_key, None)
+            if entity_value is not None:
+                return "tracked_entities", metric_key, entity_value
+            raise MeasurementNotFoundError(
+                f"Metric '{metric_key}' not found on selected measurement"
+            )
+
+        normalized = metric_key.lower()
+        for key in list(tracked_attributes.keys()):
+            if str(key).lower() == normalized:
+                return "tracked_attributes", key, tracked_attributes.pop(key)
+
+        raise MeasurementNotFoundError(
+            f"Metric '{metric_key}' not found on selected measurement"
+        )
+
+    @staticmethod
+    def _set_metric(
+        measurement: WeightMeasurement,
+        container_key: str,
+        metric_key: str,
+        metric_value: Any,
+    ) -> None:
+        raw = RouterRuntime._ensure_raw_payload(measurement)
+        container = raw.get(container_key)
+        if not isinstance(container, dict):
+            container = {}
+            raw[container_key] = container
+        container[metric_key] = metric_value
+
+    def move_measurement_metric(
+        self,
+        from_user_id: str,
+        to_user_id: str,
+        metric_key: str,
+        from_measurement_id: str | None = None,
+        to_measurement_id: str | None = None,
+    ) -> None:
+        source_measurement = self._select_user_measurement(
+            from_user_id,
+            from_measurement_id,
+        )
+        target_measurement = self._select_user_measurement(
+            to_user_id,
+            to_measurement_id,
+        )
+
+        container_key, resolved_key, metric_value = self._pop_metric(
+            source_measurement,
+            metric_key,
+        )
+        self._set_metric(
+            target_measurement,
+            container_key,
+            resolved_key,
+            metric_value,
+        )
+
+        self.persist_router_state()
+        self._notify()
+
+    def remove_measurement_metric(
+        self,
+        user_id: str,
+        metric_key: str,
+        measurement_id: str | None = None,
+    ) -> None:
+        measurement = self._select_user_measurement(user_id, measurement_id)
+        self._pop_metric(measurement, metric_key)
+
+        self.persist_router_state()
+        self._notify()
+
     @callback
     def _async_handle_source_update(self, event: Event) -> None:
         new_state = event.data.get("new_state")

@@ -14,16 +14,23 @@ from homeassistant.helpers import config_validation as cv, device_registry as dr
 from homeassistant.helpers.start import async_at_started
 
 from .const import (
+    COMPONENT_EXTRA_METRIC,
+    COMPONENT_WEIGHT,
+    CONF_COMPONENT,
     CONF_DEVICE_ID,
     CONF_FROM_USER_ID,
+    CONF_METRIC_KEY,
     CONF_MEASUREMENT_ID,
+    CONF_TARGET_MEASUREMENT_ID,
     CONF_TO_USER_ID,
     CONF_USER_ID,
     DATA_ROUTER,
     DATA_MOBILE_APP_LISTENER_UNSUB,
     DOMAIN,
     SERVICE_ASSIGN_MEASUREMENT,
+    SERVICE_MOVE_MEASUREMENT_COMPONENT,
     SERVICE_REASSIGN_MEASUREMENT,
+    SERVICE_REMOVE_MEASUREMENT_COMPONENT,
     SERVICE_REMOVE_MEASUREMENT,
 )
 from .coordinator import RouterRuntime
@@ -60,6 +67,28 @@ REMOVE_SCHEMA = vol.Schema(
         vol.Required(CONF_DEVICE_ID): cv.string,
         vol.Required(CONF_USER_ID): cv.string,
         vol.Optional(CONF_MEASUREMENT_ID): cv.string,
+    }
+)
+
+MOVE_COMPONENT_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_DEVICE_ID): cv.string,
+        vol.Required(CONF_FROM_USER_ID): cv.string,
+        vol.Required(CONF_TO_USER_ID): cv.string,
+        vol.Required(CONF_COMPONENT): vol.In([COMPONENT_WEIGHT, COMPONENT_EXTRA_METRIC]),
+        vol.Optional(CONF_MEASUREMENT_ID): cv.string,
+        vol.Optional(CONF_TARGET_MEASUREMENT_ID): cv.string,
+        vol.Optional(CONF_METRIC_KEY): cv.string,
+    }
+)
+
+REMOVE_COMPONENT_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_DEVICE_ID): cv.string,
+        vol.Required(CONF_USER_ID): cv.string,
+        vol.Required(CONF_COMPONENT): vol.In([COMPONENT_WEIGHT, COMPONENT_EXTRA_METRIC]),
+        vol.Optional(CONF_MEASUREMENT_ID): cv.string,
+        vol.Optional(CONF_METRIC_KEY): cv.string,
     }
 )
 
@@ -126,6 +155,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             SERVICE_ASSIGN_MEASUREMENT,
             SERVICE_REASSIGN_MEASUREMENT,
             SERVICE_REMOVE_MEASUREMENT,
+            SERVICE_MOVE_MEASUREMENT_COMPONENT,
+            SERVICE_REMOVE_MEASUREMENT_COMPONENT,
         ):
             hass.services.async_remove(DOMAIN, service)
         if unsub := domain_data.pop(DATA_MOBILE_APP_LISTENER_UNSUB, None):
@@ -382,6 +413,87 @@ def _register_services(hass: HomeAssistant) -> None:
         except Exception as error:
             raise HomeAssistantError(str(error)) from error
 
+    async def handle_move_component(call: ServiceCall) -> None:
+        runtime = _get_runtime_for_call(hass, call)
+        from_user_id = call.data[CONF_FROM_USER_ID]
+        to_user_id = call.data[CONF_TO_USER_ID]
+        component = call.data[CONF_COMPONENT]
+        measurement_id = call.data.get(CONF_MEASUREMENT_ID)
+        target_measurement_id = call.data.get(CONF_TARGET_MEASUREMENT_ID)
+        metric_key = call.data.get(CONF_METRIC_KEY)
+
+        valid_user_ids = {user.user_id for user in runtime.users}
+        if from_user_id not in valid_user_ids:
+            raise HomeAssistantError(
+                "Unknown from_user_id "
+                f"'{from_user_id}'. Valid users: {_format_user_choices(runtime)}"
+            )
+        if to_user_id not in valid_user_ids:
+            raise HomeAssistantError(
+                f"Unknown to_user_id '{to_user_id}'. Valid users: {_format_user_choices(runtime)}"
+            )
+
+        if component == COMPONENT_WEIGHT:
+            try:
+                runtime.reassign_measurement(
+                    from_user_id,
+                    to_user_id,
+                    measurement_id,
+                )
+            except Exception as error:
+                raise HomeAssistantError(str(error)) from error
+            return
+
+        if not metric_key:
+            raise HomeAssistantError(
+                "metric_key is required when component is extra_metric"
+            )
+
+        try:
+            runtime.move_measurement_metric(
+                from_user_id=from_user_id,
+                to_user_id=to_user_id,
+                metric_key=metric_key,
+                from_measurement_id=measurement_id,
+                to_measurement_id=target_measurement_id,
+            )
+        except Exception as error:
+            raise HomeAssistantError(str(error)) from error
+
+    async def handle_remove_component(call: ServiceCall) -> None:
+        runtime = _get_runtime_for_call(hass, call)
+        user_id = call.data[CONF_USER_ID]
+        component = call.data[CONF_COMPONENT]
+        measurement_id = call.data.get(CONF_MEASUREMENT_ID)
+        metric_key = call.data.get(CONF_METRIC_KEY)
+
+        valid_user_ids = {user.user_id for user in runtime.users}
+        if user_id not in valid_user_ids:
+            raise HomeAssistantError(
+                f"Unknown user_id '{user_id}'. Valid users: {_format_user_choices(runtime)}"
+            )
+
+        if component == COMPONENT_WEIGHT:
+            try:
+                runtime.remove_measurement(user_id, measurement_id)
+            except Exception as error:
+                raise HomeAssistantError(str(error)) from error
+            return
+
+        if not metric_key:
+            raise HomeAssistantError(
+                "metric_key is required when component is extra_metric"
+            )
+
+        try:
+            runtime.remove_measurement_metric(
+                user_id=user_id,
+                metric_key=metric_key,
+                measurement_id=measurement_id,
+            )
+        except Exception as error:
+            raise HomeAssistantError(str(error)) from error
+
     hass.services.async_register(
         DOMAIN,
         SERVICE_ASSIGN_MEASUREMENT,
@@ -399,4 +511,16 @@ def _register_services(hass: HomeAssistant) -> None:
         SERVICE_REMOVE_MEASUREMENT,
         handle_remove,
         schema=REMOVE_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_MOVE_MEASUREMENT_COMPONENT,
+        handle_move_component,
+        schema=MOVE_COMPONENT_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_REMOVE_MEASUREMENT_COMPONENT,
+        handle_remove_component,
+        schema=REMOVE_COMPONENT_SCHEMA,
     )

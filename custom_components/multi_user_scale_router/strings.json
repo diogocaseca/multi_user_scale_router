@@ -183,6 +183,66 @@
           "description": "The measurement ID of the specific measurement to remove. If not provided, removes the newest measurement."
         }
       }
+    },
+    "move_measurement_component": {
+      "name": "Move measurement component",
+      "description": "Move only a selected component from one user to another. Choose weight to move the whole weight measurement or extra metric to move a single tracked metric.",
+      "fields": {
+        "device_id": {
+          "name": "Scale Router Device",
+          "description": "The Multi-User Scale Router device."
+        },
+        "from_user_id": {
+          "name": "From User ID",
+          "description": "The user ID where the component currently exists."
+        },
+        "to_user_id": {
+          "name": "To User ID",
+          "description": "The user ID that will receive the component."
+        },
+        "component": {
+          "name": "Component",
+          "description": "Select whether to move the full weight measurement or only one extra metric."
+        },
+        "measurement_id": {
+          "name": "Source Measurement ID",
+          "description": "Measurement ID on the source user. If omitted, uses the newest measurement."
+        },
+        "target_measurement_id": {
+          "name": "Target Measurement ID",
+          "description": "Target measurement on the destination user for extra metric moves. If omitted, uses the newest measurement."
+        },
+        "metric_key": {
+          "name": "Metric Key",
+          "description": "Required when component is extra_metric. Use attribute key (e.g. impedance) or tracked entity_id."
+        }
+      }
+    },
+    "remove_measurement_component": {
+      "name": "Remove measurement component",
+      "description": "Remove only a selected component from a user. Choose weight to delete the whole weight measurement or extra metric to delete a single tracked metric.",
+      "fields": {
+        "device_id": {
+          "name": "Scale Router Device",
+          "description": "The Multi-User Scale Router device."
+        },
+        "user_id": {
+          "name": "User ID",
+          "description": "The user ID to remove the component from."
+        },
+        "component": {
+          "name": "Component",
+          "description": "Select whether to remove the full weight measurement or only one extra metric."
+        },
+        "measurement_id": {
+          "name": "Measurement ID",
+          "description": "Measurement ID to edit. If omitted, uses the newest measurement."
+        },
+        "metric_key": {
+          "name": "Metric Key",
+          "description": "Required when component is extra_metric. Use attribute key (e.g. impedance) or tracked entity_id."
+        }
+      }
     }
   }
 }
