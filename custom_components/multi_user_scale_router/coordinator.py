@@ -1145,6 +1145,27 @@ class RouterRuntime:
         return raw
 
     @staticmethod
+    def _available_metric_keys(measurement: WeightMeasurement) -> list[str]:
+        raw = RouterRuntime._ensure_raw_payload(measurement)
+        tracked_entities = raw.get("tracked_entities", {})
+        tracked_attributes = raw.get("tracked_attributes", {})
+
+        keys: list[str] = []
+        if isinstance(tracked_entities, dict):
+            keys.extend([str(key) for key in tracked_entities.keys()])
+        if isinstance(tracked_attributes, dict):
+            keys.extend([str(key) for key in tracked_attributes.keys()])
+        return keys
+
+    def get_measurement_metric_keys(
+        self,
+        user_id: str,
+        measurement_id: str | None = None,
+    ) -> list[str]:
+        measurement = self._select_user_measurement(user_id, measurement_id)
+        return self._available_metric_keys(measurement)
+
+    @staticmethod
     def _pop_metric(
         measurement: WeightMeasurement,
         metric_key: str,
@@ -1166,8 +1187,10 @@ class RouterRuntime:
             if str(key).lower() == normalized:
                 return "tracked_attributes", key, tracked_attributes.pop(key)
 
+        available_keys = RouterRuntime._available_metric_keys(measurement)
         raise MeasurementNotFoundError(
-            f"Metric '{metric_key}' not found on selected measurement"
+            f"Metric '{metric_key}' not found on selected measurement. "
+            f"Available metric keys: {', '.join(available_keys) if available_keys else 'none'}"
         )
 
     @staticmethod

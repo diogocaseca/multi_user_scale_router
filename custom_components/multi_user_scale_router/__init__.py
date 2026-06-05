@@ -445,9 +445,18 @@ def _register_services(hass: HomeAssistant) -> None:
             return
 
         if not metric_key:
-            raise HomeAssistantError(
-                "metric_key is required when component is extra_metric"
+            available_keys = runtime.get_measurement_metric_keys(
+                from_user_id,
+                measurement_id,
             )
+            if len(available_keys) == 1:
+                metric_key = available_keys[0]
+            else:
+                raise HomeAssistantError(
+                    "metric_key is required when component is extra_metric. "
+                    "Available metric keys: "
+                    f"{', '.join(available_keys) if available_keys else 'none'}"
+                )
 
         try:
             runtime.move_measurement_metric(
@@ -481,9 +490,18 @@ def _register_services(hass: HomeAssistant) -> None:
             return
 
         if not metric_key:
-            raise HomeAssistantError(
-                "metric_key is required when component is extra_metric"
+            available_keys = runtime.get_measurement_metric_keys(
+                user_id,
+                measurement_id,
             )
+            if len(available_keys) == 1:
+                metric_key = available_keys[0]
+            else:
+                raise HomeAssistantError(
+                    "metric_key is required when component is extra_metric. "
+                    "Available metric keys: "
+                    f"{', '.join(available_keys) if available_keys else 'none'}"
+                )
 
         try:
             runtime.remove_measurement_metric(
