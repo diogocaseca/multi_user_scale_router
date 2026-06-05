@@ -186,7 +186,7 @@
     },
     "move_measurement_component": {
       "name": "Move measurement component",
-      "description": "Move only a selected component from one user to another. Choose weight to move the whole weight measurement or extra metric to move a single tracked metric.",
+      "description": "Move only a selected component from one user to another. Choose weight to move the whole weight measurement or tracked metric to move a single tracked metric.",
       "fields": {
         "device_id": {
           "name": "Scale Router Device",
@@ -214,13 +214,13 @@
         },
         "metric_key": {
           "name": "Metric Key",
-          "description": "Required when component is extra_metric. Use attribute key (e.g. impedance) or tracked entity_id."
+          "description": "Required when component is tracked_metric. Use attribute key (e.g. impedance) or tracked entity_id."
         }
       }
     },
     "remove_measurement_component": {
       "name": "Remove measurement component",
-      "description": "Remove only a selected component from a user. Choose weight to delete the whole weight measurement or extra metric to delete a single tracked metric.",
+      "description": "Remove only a selected component from a user. Choose weight to delete the whole weight measurement or tracked metric to delete a single tracked metric.",
       "fields": {
         "device_id": {
           "name": "Scale Router Device",
@@ -240,7 +240,7 @@
         },
         "metric_key": {
           "name": "Metric Key",
-          "description": "Required when component is extra_metric. Use attribute key (e.g. impedance) or tracked entity_id."
+          "description": "Required when component is tracked_metric. Use attribute key (e.g. impedance) or tracked entity_id."
         }
       }
     }

@@ -14,7 +14,7 @@ from homeassistant.helpers import config_validation as cv, device_registry as dr
 from homeassistant.helpers.start import async_at_started
 
 from .const import (
-    COMPONENT_EXTRA_METRIC,
+    COMPONENT_TRACKED_METRIC,
     COMPONENT_WEIGHT,
     CONF_COMPONENT,
     CONF_DEVICE_ID,
@@ -75,7 +75,12 @@ MOVE_COMPONENT_SCHEMA = vol.Schema(
         vol.Required(CONF_DEVICE_ID): cv.string,
         vol.Required(CONF_FROM_USER_ID): cv.string,
         vol.Required(CONF_TO_USER_ID): cv.string,
-        vol.Required(CONF_COMPONENT): vol.In([COMPONENT_WEIGHT, COMPONENT_EXTRA_METRIC]),
+        vol.Required(CONF_COMPONENT): vol.In(
+            [
+                COMPONENT_WEIGHT,
+                COMPONENT_TRACKED_METRIC,
+            ]
+        ),
         vol.Optional(CONF_MEASUREMENT_ID): cv.string,
         vol.Optional(CONF_TARGET_MEASUREMENT_ID): cv.string,
         vol.Optional(CONF_METRIC_KEY): cv.string,
@@ -86,7 +91,12 @@ REMOVE_COMPONENT_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_DEVICE_ID): cv.string,
         vol.Required(CONF_USER_ID): cv.string,
-        vol.Required(CONF_COMPONENT): vol.In([COMPONENT_WEIGHT, COMPONENT_EXTRA_METRIC]),
+        vol.Required(CONF_COMPONENT): vol.In(
+            [
+                COMPONENT_WEIGHT,
+                COMPONENT_TRACKED_METRIC,
+            ]
+        ),
         vol.Optional(CONF_MEASUREMENT_ID): cv.string,
         vol.Optional(CONF_METRIC_KEY): cv.string,
     }
@@ -453,7 +463,7 @@ def _register_services(hass: HomeAssistant) -> None:
                 metric_key = available_keys[0]
             else:
                 raise HomeAssistantError(
-                    "metric_key is required when component is extra_metric. "
+                    "metric_key is required when component is tracked_metric. "
                     "Available metric keys: "
                     f"{', '.join(available_keys) if available_keys else 'none'}"
                 )
@@ -498,7 +508,7 @@ def _register_services(hass: HomeAssistant) -> None:
                 metric_key = available_keys[0]
             else:
                 raise HomeAssistantError(
-                    "metric_key is required when component is extra_metric. "
+                    "metric_key is required when component is tracked_metric. "
                     "Available metric keys: "
                     f"{', '.join(available_keys) if available_keys else 'none'}"
                 )

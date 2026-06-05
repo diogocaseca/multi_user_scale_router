@@ -49,7 +49,7 @@ CONF_METRIC_KEY = "metric_key"
 CONF_ROUTER_STATE = "router_state"
 
 COMPONENT_WEIGHT = "weight"
-COMPONENT_EXTRA_METRIC = "extra_metric"
+COMPONENT_TRACKED_METRIC = "tracked_metric"
 
 DATA_ROUTER = "multi_user_scale_router_data"
 DATA_MOBILE_APP_LISTENER_UNSUB = "multi_user_scale_router_mobile_app_listener_unsub"
