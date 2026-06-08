@@ -254,9 +254,21 @@ class RouterUserTrackedEntitySensor(SensorEntity):
         )
         runtime.add_listener(self.async_write_ha_state)
 
+    def _latest_measurement_with_metric(self):
+        """Return newest measurement in history that contains this tracked entity."""
+        history = self._runtime.router.get_user_history(self._user_id)
+        for measurement in reversed(history):
+            tracked = measurement.raw.get("tracked_entities")
+            if not tracked or not isinstance(tracked, dict):
+                continue
+            entity_data = tracked.get(self._source_entity_id)
+            if entity_data and isinstance(entity_data, dict):
+                return measurement
+        return None
+
     @property
     def native_value(self) -> str | float | None:
-        measurement = self._runtime.router.get_user_last_measurement(self._user_id)
+        measurement = self._latest_measurement_with_metric()
         if measurement is None:
             return None
         tracked = measurement.raw.get("tracked_entities")
@@ -269,7 +281,7 @@ class RouterUserTrackedEntitySensor(SensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
-        measurement = self._runtime.router.get_user_last_measurement(self._user_id)
+        measurement = self._latest_measurement_with_metric()
         if measurement is None:
             return None
         return {
@@ -355,9 +367,20 @@ class RouterUserTrackedAttributeSensor(SensorEntity):
 
         runtime.add_listener(self.async_write_ha_state)
 
+    def _latest_measurement_with_metric(self):
+        """Return newest measurement in history that contains this tracked attribute."""
+        history = self._runtime.router.get_user_history(self._user_id)
+        for measurement in reversed(history):
+            tracked = measurement.raw.get("tracked_attributes")
+            if not tracked or not isinstance(tracked, dict):
+                continue
+            if self._attribute_key in tracked:
+                return measurement
+        return None
+
     @property
     def native_value(self) -> str | float | None:
-        measurement = self._runtime.router.get_user_last_measurement(self._user_id)
+        measurement = self._latest_measurement_with_metric()
         if measurement is None:
             return None
         tracked = measurement.raw.get("tracked_attributes")
@@ -367,7 +390,7 @@ class RouterUserTrackedAttributeSensor(SensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
-        measurement = self._runtime.router.get_user_last_measurement(self._user_id)
+        measurement = self._latest_measurement_with_metric()
         if measurement is None:
             return None
         return {
