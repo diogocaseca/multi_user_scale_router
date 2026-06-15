@@ -39,7 +39,11 @@
           "tracked_metrics": "Additional Tracked Metrics",
           "history_retention_days": "History Retention (days)",
           "max_history_size": "Max History Size (measurements)",
-          "settling_delay": "Settling Delay (seconds)"
+          "settling_delay": "Settling Delay (seconds)",
+          "metric_freshness_window": "Metric Freshness Window (seconds)"
+        },
+        "data_description": {
+          "metric_freshness_window": "How far before a weigh-in a tracked entity (e.g. body fat, impedance, BMI) may have last updated and still be recorded with the measurement. Increase it for scales whose secondary sensors arrive slowly after the weight."
         }
       },
       "add_first_user": {
@@ -113,7 +117,11 @@
           "tracked_metrics": "Additional Tracked Metrics",
           "history_retention_days": "History Retention (days)",
           "max_history_size": "Max History Size (measurements)",
-          "settling_delay": "Settling Delay (seconds)"
+          "settling_delay": "Settling Delay (seconds)",
+          "metric_freshness_window": "Metric Freshness Window (seconds)"
+        },
+        "data_description": {
+          "metric_freshness_window": "How far before a weigh-in a tracked entity (e.g. body fat, impedance, BMI) may have last updated and still be recorded with the measurement. Increase it for scales whose secondary sensors arrive slowly after the weight."
         }
       }
     },

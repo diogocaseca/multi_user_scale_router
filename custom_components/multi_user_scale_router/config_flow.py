@@ -22,6 +22,7 @@ from multi_user_scale_core import RouterConfig, UserProfile, WeightRouter
 from .const import (
     CONF_HISTORY_RETENTION_DAYS,
     CONF_MAX_HISTORY_SIZE,
+    CONF_METRIC_FRESHNESS_WINDOW,
     CONF_MOBILE_NOTIFY_SERVICES,
     CONF_PERSON_ENTITY,
     CONF_ROUTER_STATE,
@@ -29,8 +30,10 @@ from .const import (
     CONF_TRACKED_METRICS,
     CONF_SETTLING_DELAY,
     CONF_USER_ID,
+    DEFAULT_FRESHNESS_SLACK,
     DEFAULT_HISTORY_RETENTION_DAYS,
     DEFAULT_MAX_HISTORY_SIZE,
+    DEFAULT_METRIC_FRESHNESS_WINDOW,
     DEFAULT_SETTLING_DELAY,
     DOMAIN,
     SYSTEM_ATTRIBUTES,
@@ -206,6 +209,23 @@ def _get_tracked_metrics_default(hass, defaults, default_source):
     return defaults.get(CONF_TRACKED_METRICS, [])
 
 
+def _metric_freshness_default(defaults: dict[str, Any]) -> float:
+    """Default for the freshness-window field, with backward compatibility.
+
+    Entries created before this option existed don't store the key, so we
+    surface the value they were effectively using (settling_delay + slack)
+    instead of the static default.
+    """
+    existing = defaults.get(CONF_METRIC_FRESHNESS_WINDOW)
+    if existing is not None:
+        return existing
+    settling = defaults.get(CONF_SETTLING_DELAY, DEFAULT_SETTLING_DELAY)
+    try:
+        return max(1.0, float(settling) + DEFAULT_FRESHNESS_SLACK)
+    except (TypeError, ValueError):
+        return DEFAULT_METRIC_FRESHNESS_WINDOW
+
+
 def _is_numeric_state(state) -> bool:
     if state is None:
         return False
@@ -326,6 +346,9 @@ class ScaleRouterConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     CONF_SETTLING_DELAY: user_input.get(
                         CONF_SETTLING_DELAY, DEFAULT_SETTLING_DELAY
                     ),
+                    CONF_METRIC_FRESHNESS_WINDOW: user_input.get(
+                        CONF_METRIC_FRESHNESS_WINDOW, DEFAULT_METRIC_FRESHNESS_WINDOW
+                    ),
                     CONF_HISTORY_RETENTION_DAYS: user_input[
                         CONF_HISTORY_RETENTION_DAYS
                     ],
@@ -389,6 +412,9 @@ class ScaleRouterConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_TRACKED_METRICS: self.context.get(CONF_TRACKED_METRICS, []),
                 CONF_SETTLING_DELAY: self.context.get(
                     CONF_SETTLING_DELAY, DEFAULT_SETTLING_DELAY
+                ),
+                CONF_METRIC_FRESHNESS_WINDOW: self.context.get(
+                    CONF_METRIC_FRESHNESS_WINDOW, DEFAULT_METRIC_FRESHNESS_WINDOW
                 ),
                 CONF_HISTORY_RETENTION_DAYS: self.context[CONF_HISTORY_RETENTION_DAYS],
                 CONF_MAX_HISTORY_SIZE: self.context[CONF_MAX_HISTORY_SIZE],
@@ -459,6 +485,10 @@ class ScaleRouterConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     CONF_SETTLING_DELAY,
                     default=defaults.get(CONF_SETTLING_DELAY, DEFAULT_SETTLING_DELAY),
                 ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=60.0)),
+                vol.Required(
+                    CONF_METRIC_FRESHNESS_WINDOW,
+                    default=_metric_freshness_default(defaults),
+                ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=120.0)),
             }
         )
 
@@ -691,6 +721,9 @@ class ScaleRouterOptionsFlow(OptionsFlow):
                     CONF_SETTLING_DELAY: user_input.get(
                         CONF_SETTLING_DELAY, DEFAULT_SETTLING_DELAY
                     ),
+                    CONF_METRIC_FRESHNESS_WINDOW: user_input.get(
+                        CONF_METRIC_FRESHNESS_WINDOW, DEFAULT_METRIC_FRESHNESS_WINDOW
+                    ),
                     CONF_HISTORY_RETENTION_DAYS: user_input[
                         CONF_HISTORY_RETENTION_DAYS
                     ],
@@ -796,6 +829,10 @@ class ScaleRouterOptionsFlow(OptionsFlow):
                     CONF_SETTLING_DELAY,
                     default=defaults.get(CONF_SETTLING_DELAY, DEFAULT_SETTLING_DELAY),
                 ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=60.0)),
+                vol.Required(
+                    CONF_METRIC_FRESHNESS_WINDOW,
+                    default=_metric_freshness_default(defaults),
+                ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=120.0)),
             }
         )
 

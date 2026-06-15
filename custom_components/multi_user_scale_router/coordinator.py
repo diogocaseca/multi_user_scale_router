@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from urllib.parse import quote
 from typing import Any
 
@@ -26,11 +26,14 @@ from .const import (
     CONF_PERSON_ENTITY,
     CONF_SOURCE_ENTITY_ID,
     CONF_ROUTER_STATE,
+    DEFAULT_FRESHNESS_SLACK,
     DEFAULT_HISTORY_RETENTION_DAYS,
     DEFAULT_MAX_HISTORY_SIZE,
+    DEFAULT_METRIC_FRESHNESS_WINDOW,
     DEFAULT_MIN_TOLERANCE_KG,
     DOMAIN,
     MAX_PENDING_MEASUREMENTS,
+    CONF_METRIC_FRESHNESS_WINDOW,
     CONF_SETTLING_DELAY,
     SYSTEM_ATTRIBUTES,
 )
@@ -321,6 +324,22 @@ class RouterRuntime:
 
         self.source_entity_id = self.entry_data[CONF_SOURCE_ENTITY_ID]
         self.settling_delay = self.entry_data.get(CONF_SETTLING_DELAY, 2.0)
+
+        # How far before a weigh-in a tracked entity may have last updated and
+        # still be recorded with the measurement. Entries created before this
+        # option existed don't carry the key, so we fall back to the historical
+        # behaviour (settling_delay + a fixed slack).
+        configured_freshness = self.entry_data.get(CONF_METRIC_FRESHNESS_WINDOW)
+        if configured_freshness is None:
+            self.metric_freshness_window = max(
+                1.0, float(self.settling_delay) + DEFAULT_FRESHNESS_SLACK
+            )
+        else:
+            self.metric_freshness_window = _safe_float_config(
+                configured_freshness,
+                DEFAULT_METRIC_FRESHNESS_WINDOW,
+                CONF_METRIC_FRESHNESS_WINDOW,
+            )
 
         self.tracked_entities: list[str] = []
         self.tracked_attributes: set[str] = set()
@@ -1392,7 +1411,7 @@ class RouterRuntime:
         changed_tracked_attributes: set[str],
     ) -> None:
         capture_now = dt_util.utcnow()
-        freshness_window_seconds = max(1.0, float(self.settling_delay) + 1.5)
+        freshness_window_seconds = max(1.0, float(self.metric_freshness_window))
         freshness_start = weight_timestamp - timedelta(seconds=freshness_window_seconds)
         freshness_end = capture_now + timedelta(seconds=0.5)
 
@@ -1422,13 +1441,10 @@ class RouterRuntime:
                     "none",
                     "None",
                 }
-                skipped_stale = (
-                    not skipped_unavailable
-                    and not _state_changed_within(
-                        entity_state,
-                        freshness_start,
-                        freshness_end,
-                    )
+                skipped_stale = not skipped_unavailable and not _state_changed_within(
+                    entity_state,
+                    freshness_start,
+                    freshness_end,
                 )
                 _LOGGER.debug(
                     "Tracked entity at capture (%s): %s",

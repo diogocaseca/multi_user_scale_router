@@ -71,6 +71,7 @@ When a weight measurement is assigned to a user, the integration checks the stat
 - **Tracked Metrics Picker:** You can select from sibling entities on the same scale device or attributes of the source weight sensor itself.
 - **Timing Configuration:**
   - **Settling Delay:** The integration waits this long (in seconds) after a weight update before capturing the other metrics, giving slow Bluetooth/Wi-Fi updates a chance to arrive in Home Assistant.
+  - **Metric Freshness Window:** How far before a weigh-in (in seconds) a tracked entity (e.g. body fat, impedance, BMI) may have last updated and still be recorded with the measurement. Values older than this window are treated as stale and skipped, so a metric left over from a previous weigh-in isn't attached to the current one. Increase it for scales whose secondary sensors arrive slowly after the weight. This applies to tracked entities (sibling sensors); tracked attributes of the weight sensor itself are captured whenever they change alongside the reading.
 
 
 ## Multi-User Support
