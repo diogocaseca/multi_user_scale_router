@@ -1,4 +1,12 @@
 {
+  "selector": {
+    "capture_strategy": {
+      "options": {
+        "highest": "Highest reading (default)",
+        "lowest": "Lowest reading"
+      }
+    }
+  },
   "issues": {
     "person_entity_missing": {
       "title": "{user_name}: linked person entity no longer exists",
@@ -40,10 +48,12 @@
           "history_retention_days": "History Retention (days)",
           "max_history_size": "Max History Size (measurements)",
           "settling_delay": "Settling Delay (seconds)",
-          "metric_freshness_window": "Metric Freshness Window (seconds)"
+          "metric_freshness_window": "Metric Freshness Window (seconds)",
+          "capture_strategy": "Weight Capture Strategy"
         },
         "data_description": {
-          "metric_freshness_window": "How far before a weigh-in a tracked entity (e.g. body fat, impedance, BMI) may have last updated and still be recorded with the measurement. Increase it for scales whose secondary sensors arrive slowly after the weight."
+          "metric_freshness_window": "How far before a weigh-in a tracked entity (e.g. body fat, impedance, BMI) may have last updated and still be recorded with the measurement. Increase it for scales whose secondary sensors arrive slowly after the weight.",
+          "capture_strategy": "When several readings arrive within the settling delay, which one to keep. Highest suits most scales (ignores a lighter 'step-off' value); pick Lowest only if your scale overshoots high before settling."
         }
       },
       "add_first_user": {
@@ -118,10 +128,12 @@
           "history_retention_days": "History Retention (days)",
           "max_history_size": "Max History Size (measurements)",
           "settling_delay": "Settling Delay (seconds)",
-          "metric_freshness_window": "Metric Freshness Window (seconds)"
+          "metric_freshness_window": "Metric Freshness Window (seconds)",
+          "capture_strategy": "Weight Capture Strategy"
         },
         "data_description": {
-          "metric_freshness_window": "How far before a weigh-in a tracked entity (e.g. body fat, impedance, BMI) may have last updated and still be recorded with the measurement. Increase it for scales whose secondary sensors arrive slowly after the weight."
+          "metric_freshness_window": "How far before a weigh-in a tracked entity (e.g. body fat, impedance, BMI) may have last updated and still be recorded with the measurement. Increase it for scales whose secondary sensors arrive slowly after the weight.",
+          "capture_strategy": "When several readings arrive within the settling delay, which one to keep. Highest suits most scales (ignores a lighter 'step-off' value); pick Lowest only if your scale overshoots high before settling."
         }
       }
     },

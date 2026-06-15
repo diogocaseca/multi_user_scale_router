@@ -14,6 +14,12 @@ CONF_MAX_HISTORY_SIZE = "max_history_size"
 CONF_MIN_TOLERANCE_KG = "min_tolerance_kg"
 CONF_SETTLING_DELAY = "settling_delay"
 CONF_METRIC_FRESHNESS_WINDOW = "metric_freshness_window"
+CONF_CAPTURE_STRATEGY = "capture_strategy"
+
+# Which reading wins when several updates arrive within the settling delay.
+CAPTURE_STRATEGY_HIGHEST = "highest"
+CAPTURE_STRATEGY_LOWEST = "lowest"
+CAPTURE_STRATEGIES = (CAPTURE_STRATEGY_HIGHEST, CAPTURE_STRATEGY_LOWEST)
 
 SYSTEM_ATTRIBUTES = {
     "friendly_name",
@@ -65,4 +71,5 @@ DEFAULT_SETTLING_DELAY = 2.0
 # for entries created before the window became configurable.
 DEFAULT_FRESHNESS_SLACK = 1.5
 DEFAULT_METRIC_FRESHNESS_WINDOW = DEFAULT_SETTLING_DELAY + DEFAULT_FRESHNESS_SLACK
+DEFAULT_CAPTURE_STRATEGY = CAPTURE_STRATEGY_HIGHEST
 MAX_PENDING_MEASUREMENTS = 10

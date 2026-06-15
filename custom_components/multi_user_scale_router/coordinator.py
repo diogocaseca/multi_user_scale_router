@@ -19,6 +19,9 @@ from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_conversion import MassConverter
 
 from .const import (
+    CAPTURE_STRATEGIES,
+    CAPTURE_STRATEGY_LOWEST,
+    CONF_CAPTURE_STRATEGY,
     CONF_HISTORY_RETENTION_DAYS,
     CONF_MAX_HISTORY_SIZE,
     CONF_MOBILE_NOTIFY_SERVICES,
@@ -26,6 +29,7 @@ from .const import (
     CONF_PERSON_ENTITY,
     CONF_SOURCE_ENTITY_ID,
     CONF_ROUTER_STATE,
+    DEFAULT_CAPTURE_STRATEGY,
     DEFAULT_FRESHNESS_SLACK,
     DEFAULT_HISTORY_RETENTION_DAYS,
     DEFAULT_MAX_HISTORY_SIZE,
@@ -340,6 +344,21 @@ class RouterRuntime:
                 DEFAULT_METRIC_FRESHNESS_WINDOW,
                 CONF_METRIC_FRESHNESS_WINDOW,
             )
+
+        # Which reading wins when several updates arrive within the settling
+        # delay: the heaviest (default) or the lightest. An unrecognised stored
+        # value falls back to the default rather than silently doing nothing.
+        capture_strategy = self.entry_data.get(
+            CONF_CAPTURE_STRATEGY, DEFAULT_CAPTURE_STRATEGY
+        )
+        if capture_strategy not in CAPTURE_STRATEGIES:
+            _LOGGER.warning(
+                "Invalid capture strategy %r, using default %r",
+                capture_strategy,
+                DEFAULT_CAPTURE_STRATEGY,
+            )
+            capture_strategy = DEFAULT_CAPTURE_STRATEGY
+        self.capture_strategy = capture_strategy
 
         self.tracked_entities: list[str] = []
         self.tracked_attributes: set[str] = set()
@@ -1347,10 +1366,19 @@ class RouterRuntime:
                 changed_tracked_attributes=set(changed_tracked_attrs),
             )
         else:
-            # Keep the heaviest value seen in the current burst. This protects the
-            # real weigh-in from a trailing "step-off" value that can arrive before
+            # Keep the heaviest (or lightest, per capture_strategy) value seen in
+            # the current burst. The default "highest" protects the real weigh-in
+            # from a trailing "step-off" value that can arrive before
             # settling_delay expires.
-            if weight_kg > (self._pending_capture.selected_weight_kg + 0.01):
+            if self.capture_strategy == CAPTURE_STRATEGY_LOWEST:
+                should_replace = weight_kg < (
+                    self._pending_capture.selected_weight_kg - 0.01
+                )
+            else:
+                should_replace = weight_kg > (
+                    self._pending_capture.selected_weight_kg + 0.01
+                )
+            if should_replace:
                 self._pending_capture.selected_state = new_state
                 self._pending_capture.selected_weight_kg = weight_kg
                 self._pending_capture.selected_unit = unit

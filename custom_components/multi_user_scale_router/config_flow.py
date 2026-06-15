@@ -20,6 +20,8 @@ from homeassistant.helpers import (
 from multi_user_scale_core import RouterConfig, UserProfile, WeightRouter
 
 from .const import (
+    CAPTURE_STRATEGIES,
+    CONF_CAPTURE_STRATEGY,
     CONF_HISTORY_RETENTION_DAYS,
     CONF_MAX_HISTORY_SIZE,
     CONF_METRIC_FRESHNESS_WINDOW,
@@ -30,6 +32,7 @@ from .const import (
     CONF_TRACKED_METRICS,
     CONF_SETTLING_DELAY,
     CONF_USER_ID,
+    DEFAULT_CAPTURE_STRATEGY,
     DEFAULT_FRESHNESS_SLACK,
     DEFAULT_HISTORY_RETENTION_DAYS,
     DEFAULT_MAX_HISTORY_SIZE,
@@ -226,6 +229,17 @@ def _metric_freshness_default(defaults: dict[str, Any]) -> float:
         return DEFAULT_METRIC_FRESHNESS_WINDOW
 
 
+def _capture_strategy_selector() -> selector.SelectSelector:
+    """Dropdown for choosing which reading wins within the settling delay."""
+    return selector.SelectSelector(
+        selector.SelectSelectorConfig(
+            options=list(CAPTURE_STRATEGIES),
+            mode=selector.SelectSelectorMode.DROPDOWN,
+            translation_key=CONF_CAPTURE_STRATEGY,
+        )
+    )
+
+
 def _is_numeric_state(state) -> bool:
     if state is None:
         return False
@@ -349,6 +363,9 @@ class ScaleRouterConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     CONF_METRIC_FRESHNESS_WINDOW: user_input.get(
                         CONF_METRIC_FRESHNESS_WINDOW, DEFAULT_METRIC_FRESHNESS_WINDOW
                     ),
+                    CONF_CAPTURE_STRATEGY: user_input.get(
+                        CONF_CAPTURE_STRATEGY, DEFAULT_CAPTURE_STRATEGY
+                    ),
                     CONF_HISTORY_RETENTION_DAYS: user_input[
                         CONF_HISTORY_RETENTION_DAYS
                     ],
@@ -415,6 +432,9 @@ class ScaleRouterConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 ),
                 CONF_METRIC_FRESHNESS_WINDOW: self.context.get(
                     CONF_METRIC_FRESHNESS_WINDOW, DEFAULT_METRIC_FRESHNESS_WINDOW
+                ),
+                CONF_CAPTURE_STRATEGY: self.context.get(
+                    CONF_CAPTURE_STRATEGY, DEFAULT_CAPTURE_STRATEGY
                 ),
                 CONF_HISTORY_RETENTION_DAYS: self.context[CONF_HISTORY_RETENTION_DAYS],
                 CONF_MAX_HISTORY_SIZE: self.context[CONF_MAX_HISTORY_SIZE],
@@ -489,6 +509,12 @@ class ScaleRouterConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     CONF_METRIC_FRESHNESS_WINDOW,
                     default=_metric_freshness_default(defaults),
                 ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=120.0)),
+                vol.Required(
+                    CONF_CAPTURE_STRATEGY,
+                    default=defaults.get(
+                        CONF_CAPTURE_STRATEGY, DEFAULT_CAPTURE_STRATEGY
+                    ),
+                ): _capture_strategy_selector(),
             }
         )
 
@@ -724,6 +750,9 @@ class ScaleRouterOptionsFlow(OptionsFlow):
                     CONF_METRIC_FRESHNESS_WINDOW: user_input.get(
                         CONF_METRIC_FRESHNESS_WINDOW, DEFAULT_METRIC_FRESHNESS_WINDOW
                     ),
+                    CONF_CAPTURE_STRATEGY: user_input.get(
+                        CONF_CAPTURE_STRATEGY, DEFAULT_CAPTURE_STRATEGY
+                    ),
                     CONF_HISTORY_RETENTION_DAYS: user_input[
                         CONF_HISTORY_RETENTION_DAYS
                     ],
@@ -833,6 +862,12 @@ class ScaleRouterOptionsFlow(OptionsFlow):
                     CONF_METRIC_FRESHNESS_WINDOW,
                     default=_metric_freshness_default(defaults),
                 ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=120.0)),
+                vol.Required(
+                    CONF_CAPTURE_STRATEGY,
+                    default=defaults.get(
+                        CONF_CAPTURE_STRATEGY, DEFAULT_CAPTURE_STRATEGY
+                    ),
+                ): _capture_strategy_selector(),
             }
         )
 

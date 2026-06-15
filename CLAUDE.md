@@ -27,7 +27,7 @@ The data flow has one central object, `RouterRuntime` (`coordinator.py`), create
 
 **Capture pipeline** (`coordinator.py`, the heart of the integration):
 1. `async_track_state_change_event` on the source sensor → `_async_handle_source_update`. Noise/duplicate events (no meaningful weight or tracked-attribute change, unit-only changes) are filtered here.
-2. Updates are **debounced** into a `PendingCapture` for `settling_delay` seconds (default 2.0). Within a burst the **heaviest** value wins — this defeats trailing "step-off" readings. This is *not* the same thing as a pending *measurement*.
+2. Updates are **debounced** into a `PendingCapture` for `settling_delay` seconds (default 2.0); each accepted update resets the timer. Within a burst, the winning value is the heaviest or lightest depending on `capture_strategy` (default `highest`, which defeats trailing "step-off" readings). This is *not* the same thing as a pending *measurement*.
 3. On settle, `_async_capture_and_route` snapshots tracked metrics, applies a freshness window so stale sibling/attribute values are dropped, builds a `WeightMeasurement`, and calls `router.evaluate_measurement`.
 4. Candidates are filtered by location (`_filter_user_ids_by_location` excludes only people whose linked `person.*` is exactly `not_home`, with a fallback to all users if filtering empties the list). One candidate → auto-record. Multiple → `_store_pending_measurement`.
 
