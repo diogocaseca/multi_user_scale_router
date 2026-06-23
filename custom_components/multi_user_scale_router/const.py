@@ -43,6 +43,7 @@ SYSTEM_ATTRIBUTES = {
 SERVICE_ASSIGN_MEASUREMENT = "assign_measurement"
 SERVICE_REASSIGN_MEASUREMENT = "reassign_measurement"
 SERVICE_REMOVE_MEASUREMENT = "remove_measurement"
+SERVICE_REMOVE_PENDING_MEASUREMENT = "remove_pending_measurement"
 SERVICE_MOVE_MEASUREMENT_COMPONENT = "move_measurement_component"
 SERVICE_REMOVE_MEASUREMENT_COMPONENT = "remove_measurement_component"
 CONF_DEVICE_ID = "device_id"

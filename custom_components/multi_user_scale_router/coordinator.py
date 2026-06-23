@@ -1068,6 +1068,28 @@ class RouterRuntime:
         self._notify_diagnostic_sensors()
         return recorded
 
+    def discard_pending_measurement(self, measurement_id: str) -> WeightMeasurement:
+        """Discard a still-pending (unassigned) measurement by its ID.
+
+        Removes the pending measurement entirely without recording it for any
+        user, clearing both the persistent and mobile notifications.
+        """
+        pending = self._pending_measurements.pop(measurement_id, None)
+        if pending is None:
+            raise MeasurementNotFoundError("Pending measurement not found")
+
+        if pending.notified_mobile_services and hasattr(self.hass, "async_create_task"):
+            self.hass.async_create_task(
+                self._clear_mobile_notifications(
+                    measurement_id,
+                    pending.notified_mobile_services,
+                )
+            )
+        self._dismiss_pending_notification(measurement_id)
+        self._notify()
+        self._notify_diagnostic_sensors()
+        return pending.measurement
+
     def ignore_candidate_for_pending_measurement(
         self,
         measurement_id: str,

@@ -32,6 +32,7 @@ from .const import (
     SERVICE_REASSIGN_MEASUREMENT,
     SERVICE_REMOVE_MEASUREMENT_COMPONENT,
     SERVICE_REMOVE_MEASUREMENT,
+    SERVICE_REMOVE_PENDING_MEASUREMENT,
 )
 from .coordinator import RouterRuntime
 from .repairs import (
@@ -67,6 +68,13 @@ REMOVE_SCHEMA = vol.Schema(
         vol.Required(CONF_DEVICE_ID): cv.string,
         vol.Required(CONF_USER_ID): cv.string,
         vol.Optional(CONF_MEASUREMENT_ID): cv.string,
+    }
+)
+
+REMOVE_PENDING_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_DEVICE_ID): cv.string,
+        vol.Required(CONF_MEASUREMENT_ID): cv.string,
     }
 )
 
@@ -165,6 +173,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             SERVICE_ASSIGN_MEASUREMENT,
             SERVICE_REASSIGN_MEASUREMENT,
             SERVICE_REMOVE_MEASUREMENT,
+            SERVICE_REMOVE_PENDING_MEASUREMENT,
             SERVICE_MOVE_MEASUREMENT_COMPONENT,
             SERVICE_REMOVE_MEASUREMENT_COMPONENT,
         ):
@@ -423,6 +432,21 @@ def _register_services(hass: HomeAssistant) -> None:
         except Exception as error:
             raise HomeAssistantError(str(error)) from error
 
+    async def handle_remove_pending(call: ServiceCall) -> None:
+        runtime = _get_runtime_for_call(hass, call)
+        measurement_id = call.data[CONF_MEASUREMENT_ID]
+        if measurement_id not in {
+            item["measurement_id"] for item in runtime.pending_measurement_details
+        }:
+            raise HomeAssistantError(
+                "Unknown pending measurement_id "
+                f"'{measurement_id}'. Pending measurements: {_format_pending_ids(runtime)}"
+            )
+        try:
+            runtime.discard_pending_measurement(measurement_id)
+        except Exception as error:
+            raise HomeAssistantError(str(error)) from error
+
     async def handle_move_component(call: ServiceCall) -> None:
         runtime = _get_runtime_for_call(hass, call)
         from_user_id = call.data[CONF_FROM_USER_ID]
@@ -539,6 +563,12 @@ def _register_services(hass: HomeAssistant) -> None:
         SERVICE_REMOVE_MEASUREMENT,
         handle_remove,
         schema=REMOVE_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_REMOVE_PENDING_MEASUREMENT,
+        handle_remove_pending,
+        schema=REMOVE_PENDING_SCHEMA,
     )
     hass.services.async_register(
         DOMAIN,

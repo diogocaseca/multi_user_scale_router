@@ -83,6 +83,25 @@ remove_measurement:
       selector:
         text:
 
+remove_pending_measurement:
+  name: Remove pending measurement
+  description: Discard a pending weight measurement that has not yet been assigned to any user, identified by its measurement ID. The measurement is dropped without being recorded for anyone.
+  fields:
+    device_id:
+      name: Scale
+      description: The scale router device.
+      required: true
+      selector:
+        device:
+          integration: multi_user_scale_router
+    measurement_id:
+      name: Measurement ID
+      description: The measurement ID of the pending measurement to discard (shown in the notification).
+      required: true
+      example: "e7e7be2c9bfe4e6fb66bf713bbcb0c74"
+      selector:
+        text:
+
 move_measurement_component:
   name: Move measurement component
   description: Move only a selected component from one user to another. Choose weight to move the whole weight measurement or tracked metric to move a single tracked metric.
