@@ -27,6 +27,7 @@ from .const import (
     CONF_MOBILE_NOTIFY_SERVICES,
     CONF_MIN_TOLERANCE_KG,
     CONF_PERSON_ENTITY,
+    CONF_SECONDARY_SOURCE_ENTITY_ID,
     CONF_SOURCE_ENTITY_ID,
     CONF_ROUTER_STATE,
     DEFAULT_CAPTURE_STRATEGY,
@@ -52,6 +53,10 @@ from multi_user_scale_core import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# Which entity contributed the winning reading in a capture burst.
+SOURCE_PRIMARY = "primary"
+SOURCE_SECONDARY = "secondary"
+
 
 def _norm_country_code(config: Any) -> str:
     """Extract normalized 2-letter country code from HA config."""
@@ -71,12 +76,20 @@ class PendingMeasurement:
 
 @dataclass
 class PendingCapture:
-    """Debounced burst of source updates waiting to be captured."""
+    """Debounced burst of source updates waiting to be captured.
+
+    ``selected_source`` tracks whether the winning reading so far came from the
+    primary entity or the optional secondary (fallback) entity. Once a primary
+    reading is part of the burst the source becomes ``"primary"`` and never
+    reverts: later secondary readings are ignored entirely.
+    """
 
     selected_state: Any
     selected_weight_kg: float
     selected_unit: str
     selected_timestamp: datetime
+    selected_source: str
+    selected_source_entity_id: str
     changed_tracked_attributes: set[str] = field(default_factory=set)
 
 
@@ -327,6 +340,19 @@ class RouterRuntime:
             self.router.set_users(users)
 
         self.source_entity_id = self.entry_data[CONF_SOURCE_ENTITY_ID]
+
+        # Optional fallback weight entity. Ignored when unset, empty, or equal to
+        # the primary (a degenerate config that would double-subscribe).
+        secondary_source = self.entry_data.get(CONF_SECONDARY_SOURCE_ENTITY_ID)
+        if (
+            isinstance(secondary_source, str)
+            and secondary_source
+            and secondary_source != self.source_entity_id
+        ):
+            self.secondary_source_entity_id: str | None = secondary_source
+        else:
+            self.secondary_source_entity_id = None
+
         self.settling_delay = self.entry_data.get(CONF_SETTLING_DELAY, 2.0)
 
         # How far before a weigh-in a tracked entity may have last updated and
@@ -389,15 +415,23 @@ class RouterRuntime:
         return self.source_entity_id
 
     @property
+    def source_entity_ids(self) -> list[str]:
+        """All weight entities this runtime listens to (primary first)."""
+        if self.secondary_source_entity_id is None:
+            return [self.source_entity_id]
+        return [self.source_entity_id, self.secondary_source_entity_id]
+
+    @property
     def display_unit(self) -> str:
         state = getattr(self.hass, "states", None)
         if state is not None:
-            source_state = state.get(self.source_entity_id)
-            source_unit = getattr(source_state, "attributes", {}).get(
-                "unit_of_measurement"
-            )
-            if isinstance(source_unit, str) and source_unit:
-                return _normalize_display_unit(source_unit)
+            for entity_id in self.source_entity_ids:
+                source_state = state.get(entity_id)
+                source_unit = getattr(source_state, "attributes", {}).get(
+                    "unit_of_measurement"
+                )
+                if isinstance(source_unit, str) and source_unit:
+                    return _normalize_display_unit(source_unit)
 
         for pending in self.pending_measurements:
             if pending.measurement.source_unit:
@@ -519,7 +553,7 @@ class RouterRuntime:
             self.persist_router_state()
         self._unsub_state = async_track_state_change_event(
             self.hass,
-            self.source_entity_id,
+            self.source_entity_ids,
             self._async_handle_source_update,
         )
 
@@ -1315,10 +1349,17 @@ class RouterRuntime:
         new_state = event.data.get("new_state")
         old_state = event.data.get("old_state")
 
+        entity_id = event.data.get("entity_id") or self.source_entity_id
+        is_secondary = (
+            self.secondary_source_entity_id is not None
+            and entity_id == self.secondary_source_entity_id
+        )
+        source_kind = SOURCE_SECONDARY if is_secondary else SOURCE_PRIMARY
+
         if old_state is None:
             _LOGGER.debug(
                 "Skipping source update for %s: entity restored on startup (old_state is None)",
-                self.source_entity_id,
+                entity_id,
             )
             return
 
@@ -1362,7 +1403,7 @@ class RouterRuntime:
         ):
             _LOGGER.debug(
                 "Skipping source update for %s: no meaningful weight/attribute change",
-                self.source_entity_id,
+                entity_id,
             )
             return
 
@@ -1373,11 +1414,27 @@ class RouterRuntime:
         ):
             _LOGGER.debug(
                 "Skipping source update for %s: unit change only, raw value unchanged",
-                self.source_entity_id,
+                entity_id,
             )
             return
 
         event_timestamp = _state_timestamp_utc(new_state)
+
+        # Secondary readings only drive the capture as a fallback. The moment a
+        # primary reading is part of the burst, the capture is "owned" by the
+        # primary and any secondary reading is ignored — it neither contributes a
+        # value nor resets the settling delay.
+        if (
+            is_secondary
+            and self._pending_capture is not None
+            and self._pending_capture.selected_source == SOURCE_PRIMARY
+        ):
+            _LOGGER.debug(
+                "Ignoring secondary update from %s: primary entity already owns "
+                "the current capture burst",
+                entity_id,
+            )
+            return
 
         if self._pending_capture is None:
             self._pending_capture = PendingCapture(
@@ -1385,13 +1442,39 @@ class RouterRuntime:
                 selected_weight_kg=weight_kg,
                 selected_unit=unit,
                 selected_timestamp=event_timestamp,
+                selected_source=source_kind,
+                selected_source_entity_id=entity_id,
                 changed_tracked_attributes=set(changed_tracked_attrs),
             )
+        elif (
+            not is_secondary
+            and self._pending_capture.selected_source == SOURCE_SECONDARY
+        ):
+            # A primary reading arrived during a burst that was, so far, only
+            # driven by the secondary entity. The primary supersedes it: discard
+            # the secondary selection entirely and restart selection from this
+            # primary value (the highest/lowest strategy will then apply among
+            # any further primary readings).
+            _LOGGER.debug(
+                "Primary update from %s supersedes secondary-driven capture; "
+                "discarding secondary reading",
+                entity_id,
+            )
+            self._pending_capture.selected_state = new_state
+            self._pending_capture.selected_weight_kg = weight_kg
+            self._pending_capture.selected_unit = unit
+            self._pending_capture.selected_timestamp = event_timestamp
+            self._pending_capture.selected_source = SOURCE_PRIMARY
+            self._pending_capture.selected_source_entity_id = entity_id
+            self._pending_capture.changed_tracked_attributes = set(
+                changed_tracked_attrs
+            )
         else:
-            # Keep the heaviest (or lightest, per capture_strategy) value seen in
-            # the current burst. The default "highest" protects the real weigh-in
-            # from a trailing "step-off" value that can arrive before
-            # settling_delay expires.
+            # Same source as the current selection (primary↔primary or, while no
+            # primary has appeared, secondary↔secondary). Keep the heaviest (or
+            # lightest, per capture_strategy) value seen so far. The default
+            # "highest" protects the real weigh-in from a trailing "step-off"
+            # value that can arrive before settling_delay expires.
             if self.capture_strategy == CAPTURE_STRATEGY_LOWEST:
                 should_replace = weight_kg < (
                     self._pending_capture.selected_weight_kg - 0.01
@@ -1405,6 +1488,7 @@ class RouterRuntime:
                 self._pending_capture.selected_weight_kg = weight_kg
                 self._pending_capture.selected_unit = unit
                 self._pending_capture.selected_timestamp = event_timestamp
+                self._pending_capture.selected_source_entity_id = entity_id
 
             self._pending_capture.changed_tracked_attributes.update(
                 changed_tracked_attrs
@@ -1413,12 +1497,12 @@ class RouterRuntime:
         _LOGGER.debug(
             "Source update accepted for %s: %s -> %s kg (unit=%s); "
             "scheduling capture in %.1fs. Source %s",
-            self.source_entity_id,
+            entity_id,
             f"{old_weight_kg:.2f}" if old_weight_kg is not None else "None",
             f"{weight_kg:.2f}",
             unit,
             self.settling_delay,
-            _describe_state_for_log(self.source_entity_id, new_state, dt_util.utcnow()),
+            _describe_state_for_log(entity_id, new_state, dt_util.utcnow()),
         )
 
         if self._async_capture_cancel:
@@ -1449,6 +1533,7 @@ class RouterRuntime:
             pending_capture.selected_unit,
             pending_capture.selected_timestamp,
             pending_capture.changed_tracked_attributes,
+            pending_capture.selected_source_entity_id,
         )
 
     @callback
@@ -1459,7 +1544,12 @@ class RouterRuntime:
         unit: str,
         weight_timestamp: datetime,
         changed_tracked_attributes: set[str],
+        source_entity_id: str | None = None,
     ) -> None:
+        # Which entity actually provided the winning reading (primary or the
+        # optional secondary fallback). Recorded on the measurement so history
+        # reflects the true source.
+        source_entity_id = source_entity_id or self.source_entity_id
         capture_now = dt_util.utcnow()
         freshness_window_seconds = max(1.0, float(self.metric_freshness_window))
         freshness_start = weight_timestamp - timedelta(seconds=freshness_window_seconds)
@@ -1468,11 +1558,9 @@ class RouterRuntime:
         _LOGGER.debug(
             "Capturing measurement for %s (settling_delay=%.1fs elapsed). "
             "Weight source (frozen at event time) %s",
-            self.source_entity_id,
+            source_entity_id,
             self.settling_delay,
-            _describe_state_for_log(
-                self.source_entity_id, weight_state, dt_util.utcnow()
-            ),
+            _describe_state_for_log(source_entity_id, weight_state, dt_util.utcnow()),
         )
 
         raw_data = {
@@ -1526,7 +1614,7 @@ class RouterRuntime:
         measurement = WeightMeasurement(
             weight_kg=weight_kg,
             timestamp=weight_timestamp,
-            source_id=self.source_entity_id,
+            source_id=source_entity_id,
             source_unit=unit,
             raw=raw_data,
         )

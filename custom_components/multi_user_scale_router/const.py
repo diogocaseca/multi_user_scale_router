@@ -5,6 +5,13 @@ from __future__ import annotations
 DOMAIN = "multi_user_scale_router"
 
 CONF_SOURCE_ENTITY_ID = "source_entity_id"
+# Optional fallback weight entity (e.g. a "non-stabilized" reading that
+# sometimes carries the value when the primary entity doesn't update). It only
+# triggers/resets the settling delay when the primary hasn't; any primary value
+# in a burst always wins. See coordinator._async_handle_source_update.
+CONF_SECONDARY_SOURCE_ENTITY_ID = "secondary_source_entity_id"
+# Sentinel option value used in the config flow to mean "no secondary entity".
+SECONDARY_SOURCE_NONE = "none"
 
 CONF_TRACKED_METRICS = "tracked_metrics"
 CONF_PERSON_ENTITY = "person_entity"

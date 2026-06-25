@@ -52,6 +52,7 @@
         "description": "Choose the source weight sensor and detection settings.",
         "data": {
           "source_entity_id": "Source Weight Sensor",
+          "secondary_source_entity_id": "Fallback Weight Sensor (optional)",
           "tracked_metrics": "Additional Tracked Metrics",
           "history_retention_days": "History Retention (days)",
           "max_history_size": "Max History Size (measurements)",
@@ -60,6 +61,7 @@
           "capture_strategy": "Weight Capture Strategy"
         },
         "data_description": {
+          "secondary_source_entity_id": "A second weight entity from the same scale (e.g. a 'non-stabilized' reading) used only as a fallback. It captures a weigh-in only when the primary sensor doesn't update; whenever the primary reports a value during the same weigh-in, the primary value is used and this one is ignored.",
           "metric_freshness_window": "How far before a weigh-in a tracked entity (e.g. body fat, impedance, BMI) may have last updated and still be recorded with the measurement. Increase it for scales whose secondary sensors arrive slowly after the weight.",
           "capture_strategy": "When several readings arrive within the settling delay, which one to keep. Highest suits most scales (ignores a lighter 'step-off' value); pick Lowest only if your scale overshoots high before settling."
         }
@@ -142,6 +144,7 @@
         "description": "Update the source sensor and detection settings.",
         "data": {
           "source_entity_id": "Source Weight Sensor",
+          "secondary_source_entity_id": "Fallback Weight Sensor (optional)",
           "tracked_metrics": "Additional Tracked Metrics",
           "history_retention_days": "History Retention (days)",
           "max_history_size": "Max History Size (measurements)",
@@ -150,6 +153,7 @@
           "capture_strategy": "Weight Capture Strategy"
         },
         "data_description": {
+          "secondary_source_entity_id": "A second weight entity from the same scale (e.g. a 'non-stabilized' reading) used only as a fallback. It captures a weigh-in only when the primary sensor doesn't update; whenever the primary reports a value during the same weigh-in, the primary value is used and this one is ignored.",
           "metric_freshness_window": "How far before a weigh-in a tracked entity (e.g. body fat, impedance, BMI) may have last updated and still be recorded with the measurement. Increase it for scales whose secondary sensors arrive slowly after the weight.",
           "capture_strategy": "When several readings arrive within the settling delay, which one to keep. Highest suits most scales (ignores a lighter 'step-off' value); pick Lowest only if your scale overshoots high before settling."
         }

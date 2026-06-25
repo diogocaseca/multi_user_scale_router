@@ -32,6 +32,7 @@ from .const import (
     CONF_MOBILE_NOTIFY_SERVICES,
     CONF_PERSON_ENTITY,
     CONF_ROUTER_STATE,
+    CONF_SECONDARY_SOURCE_ENTITY_ID,
     CONF_SOURCE_ENTITY_ID,
     CONF_TRACKED_METRICS,
     CONF_SETTLING_DELAY,
@@ -43,6 +44,7 @@ from .const import (
     DEFAULT_METRIC_FRESHNESS_WINDOW,
     DEFAULT_SETTLING_DELAY,
     DOMAIN,
+    SECONDARY_SOURCE_NONE,
     SYSTEM_ATTRIBUTES,
 )
 
@@ -172,6 +174,35 @@ def _source_sensor_options(hass) -> list[selector.SelectOptionDict]:
         )
     )
     return [option for _score, option in options]
+
+
+def _secondary_source_sensor_options(
+    hass, primary_entity_id: str | None
+) -> list[selector.SelectOptionDict]:
+    """Weight-sensor options for the optional fallback entity.
+
+    Starts with a sentinel "None" option (so the field can be cleared) and
+    excludes the entity already chosen as the primary source.
+    """
+    options = [
+        selector.SelectOptionDict(value=SECONDARY_SOURCE_NONE, label="None (disabled)")
+    ]
+    for option in _source_sensor_options(hass):
+        if option["value"] == primary_entity_id:
+            continue
+        options.append(option)
+    return options
+
+
+def _normalize_secondary_source(
+    value: Any, primary_entity_id: str | None
+) -> str | None:
+    """Resolve a secondary-source form value to a stored entity id or None."""
+    if not isinstance(value, str):
+        return None
+    if value in ("", SECONDARY_SOURCE_NONE) or value == primary_entity_id:
+        return None
+    return value
 
 
 def _metric_options(
@@ -380,6 +411,10 @@ class ScaleRouterConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self.context.update(
                 {
                     CONF_SOURCE_ENTITY_ID: user_input[CONF_SOURCE_ENTITY_ID],
+                    CONF_SECONDARY_SOURCE_ENTITY_ID: _normalize_secondary_source(
+                        user_input.get(CONF_SECONDARY_SOURCE_ENTITY_ID),
+                        user_input[CONF_SOURCE_ENTITY_ID],
+                    ),
                     CONF_TRACKED_METRICS: user_input.get(CONF_TRACKED_METRICS, []),
                     CONF_SETTLING_DELAY: user_input.get(
                         CONF_SETTLING_DELAY, DEFAULT_SETTLING_DELAY
@@ -454,6 +489,9 @@ class ScaleRouterConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             data = {
                 "users": updated_users,
                 CONF_SOURCE_ENTITY_ID: self.context[CONF_SOURCE_ENTITY_ID],
+                CONF_SECONDARY_SOURCE_ENTITY_ID: self.context.get(
+                    CONF_SECONDARY_SOURCE_ENTITY_ID
+                ),
                 CONF_TRACKED_METRICS: self.context.get(CONF_TRACKED_METRICS, []),
                 CONF_SETTLING_DELAY: self.context.get(
                     CONF_SETTLING_DELAY, DEFAULT_SETTLING_DELAY
@@ -502,6 +540,19 @@ class ScaleRouterConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 ): selector.SelectSelector(
                     selector.SelectSelectorConfig(
                         options=sensor_options,
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                ),
+                vol.Optional(
+                    CONF_SECONDARY_SOURCE_ENTITY_ID,
+                    default=defaults.get(
+                        CONF_SECONDARY_SOURCE_ENTITY_ID, SECONDARY_SOURCE_NONE
+                    ),
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=_secondary_source_sensor_options(
+                            self.hass, default_source
+                        ),
                         mode=selector.SelectSelectorMode.DROPDOWN,
                     )
                 ),
@@ -779,6 +830,10 @@ class ScaleRouterOptionsFlow(OptionsFlow):
             return await self._update_entry(
                 **{
                     CONF_SOURCE_ENTITY_ID: user_input[CONF_SOURCE_ENTITY_ID],
+                    CONF_SECONDARY_SOURCE_ENTITY_ID: _normalize_secondary_source(
+                        user_input.get(CONF_SECONDARY_SOURCE_ENTITY_ID),
+                        user_input[CONF_SOURCE_ENTITY_ID],
+                    ),
                     CONF_TRACKED_METRICS: user_input.get(CONF_TRACKED_METRICS, []),
                     CONF_SETTLING_DELAY: user_input.get(
                         CONF_SETTLING_DELAY, DEFAULT_SETTLING_DELAY
@@ -854,6 +909,9 @@ class ScaleRouterOptionsFlow(OptionsFlow):
         tracked_metrics_default = _get_tracked_metrics_default(
             self.hass, defaults, default_source
         )
+        secondary_default = (
+            defaults.get(CONF_SECONDARY_SOURCE_ENTITY_ID) or SECONDARY_SOURCE_NONE
+        )
 
         return vol.Schema(
             {
@@ -863,6 +921,17 @@ class ScaleRouterOptionsFlow(OptionsFlow):
                 ): selector.SelectSelector(
                     selector.SelectSelectorConfig(
                         options=sensor_options,
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                ),
+                vol.Optional(
+                    CONF_SECONDARY_SOURCE_ENTITY_ID,
+                    default=secondary_default,
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=_secondary_source_sensor_options(
+                            self.hass, default_source
+                        ),
                         mode=selector.SelectSelectorMode.DROPDOWN,
                     )
                 ),
