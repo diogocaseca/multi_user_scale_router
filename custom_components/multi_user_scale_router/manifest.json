@@ -2,7 +2,8 @@
   "domain": "multi_user_scale_router",
   "name": "Multi-User Scale Router",
   "codeowners": [
-    "@ronnnnnnnnnnnnn"
+    "@ronnnnnnnnnnnnn",
+    "@diogocaseca"
   ],
   "config_flow": true,
   "documentation": "https://github.com/ronnnnnnnnnnnnn/multi_user_scale_router",
@@ -12,5 +13,5 @@
   "requirements": [
     "multi-user-scale-core==0.1.1"
   ],
-  "version": "0.2.3-rc4"
+  "version": "0.2.3"
 }
