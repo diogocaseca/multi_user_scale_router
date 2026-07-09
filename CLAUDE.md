@@ -19,7 +19,9 @@ ruff format . --check     # use `ruff format .` to apply
 # .github/workflows/{validate,hassfest}.yaml run these via GitHub Actions.
 ```
 
-There is **no test suite** in this repo (logic that would be unit-tested lives in `multi-user-scale-core`). The `.venv` has `multi_user_scale_core` installed if you need to inspect the engine's API. Ruff (config-less, defaults) is the only enforced check besides hassfest/HACS validation. Python 3.12, minimum HA `2024.1.0`.
+There is **no test suite** in this repo (logic that would be unit-tested lives in `multi-user-scale-core`). Ruff (config-less, defaults) is the only enforced check besides hassfest/HACS validation. Python 3.12, minimum HA `2024.1.0`.
+
+The `.venv` has both `multi_user_scale_core` (to inspect the engine's API) and `homeassistant` installed. The latter means `coordinator.py` can be imported and driven directly, which is the only practical way to verify a change to the capture pipeline. Write a throwaway script that: builds real `homeassistant.core.State` objects (set `last_updated`/`last_changed` **in the past**, otherwise the freshness window rejects everything); passes a fake `hass` exposing `.states.get()`; monkeypatches `coordinator.async_call_later` to neutralize the settling timer; and monkeypatches `router.evaluate_measurement` to capture the resulting `WeightMeasurement`. Feed events through `_async_handle_source_update`, then call `_async_capture_and_route_pending()` by hand. Run the same script against `git stash` to confirm the old behaviour actually failed.
 
 ## Architecture
 
@@ -60,3 +62,4 @@ Responda sempre em português do Brasil.
 ## Regras Gerais
 
 - Tome cuidado para não quebrar o que já está funcionando;
+- Os comites não será você que irá fazer;
