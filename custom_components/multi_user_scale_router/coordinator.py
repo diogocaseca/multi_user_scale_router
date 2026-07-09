@@ -90,7 +90,12 @@ class PendingCapture:
     selected_timestamp: datetime
     selected_source: str
     selected_source_entity_id: str
-    changed_tracked_attributes: set[str] = field(default_factory=set)
+    # Latest value seen for each tracked attribute that changed during the
+    # burst, accumulated across every accepted update. It is deliberately not
+    # read off ``selected_state``: the winning reading (heaviest/lightest) is
+    # often the step-on impact, which lands before the scale has computed its
+    # derived metrics.
+    tracked_attribute_values: dict[str, Any] = field(default_factory=dict)
 
 
 def _safe_int(value: Any, default: int, field_name: str) -> int:
@@ -201,25 +206,40 @@ def _state_changed_within(
     return window_start <= timestamp <= window_end
 
 
-def _get_changed_tracked_attribute_keys(
+def _is_usable_attribute_value(value: Any) -> bool:
+    """Return True when an attribute value is worth recording."""
+    if value is None:
+        return False
+    return str(value).lower() not in {"unavailable", "unknown", "none"}
+
+
+def _get_changed_tracked_attribute_values(
     old_state: Any,
     new_state: Any,
     tracked_attributes: set[str],
-) -> set[str]:
-    """Return tracked attribute keys that actually changed in this event."""
+) -> dict[str, Any]:
+    """Return tracked attributes that actually changed in this event.
+
+    Keyed by the attribute's original spelling (not lowercased) because that is
+    the key recorded on the measurement. Values that carry no information are
+    dropped here so a late ``unknown`` can't overwrite a good value collected
+    earlier in the same burst.
+    """
     if not tracked_attributes:
-        return set()
+        return {}
 
     old_attributes = getattr(old_state, "attributes", {}) or {}
     new_attributes = getattr(new_state, "attributes", {}) or {}
 
-    changed: set[str] = set()
+    changed: dict[str, Any] = {}
     for key, new_value in new_attributes.items():
-        key_lower = str(key).lower()
-        if key_lower not in tracked_attributes:
+        if str(key).lower() not in tracked_attributes:
             continue
-        if old_attributes.get(key) != new_value:
-            changed.add(key_lower)
+        if old_attributes.get(key) == new_value:
+            continue
+        if not _is_usable_attribute_value(new_value):
+            continue
+        changed[key] = new_value
 
     return changed
 
@@ -1389,7 +1409,7 @@ class RouterRuntime:
             _convert_to_kg(old_value, old_unit) if old_value is not None else None
         )
 
-        changed_tracked_attrs = _get_changed_tracked_attribute_keys(
+        changed_tracked_attrs = _get_changed_tracked_attribute_values(
             old_state, new_state, self.tracked_attributes
         )
 
@@ -1444,7 +1464,7 @@ class RouterRuntime:
                 selected_timestamp=event_timestamp,
                 selected_source=source_kind,
                 selected_source_entity_id=entity_id,
-                changed_tracked_attributes=set(changed_tracked_attrs),
+                tracked_attribute_values=dict(changed_tracked_attrs),
             )
         elif (
             not is_secondary
@@ -1466,9 +1486,7 @@ class RouterRuntime:
             self._pending_capture.selected_timestamp = event_timestamp
             self._pending_capture.selected_source = SOURCE_PRIMARY
             self._pending_capture.selected_source_entity_id = entity_id
-            self._pending_capture.changed_tracked_attributes = set(
-                changed_tracked_attrs
-            )
+            self._pending_capture.tracked_attribute_values = dict(changed_tracked_attrs)
         else:
             # Same source as the current selection (primary↔primary or, while no
             # primary has appeared, secondary↔secondary). Keep the heaviest (or
@@ -1490,9 +1508,7 @@ class RouterRuntime:
                 self._pending_capture.selected_timestamp = event_timestamp
                 self._pending_capture.selected_source_entity_id = entity_id
 
-            self._pending_capture.changed_tracked_attributes.update(
-                changed_tracked_attrs
-            )
+            self._pending_capture.tracked_attribute_values.update(changed_tracked_attrs)
 
         _LOGGER.debug(
             "Source update accepted for %s: %s -> %s kg (unit=%s); "
@@ -1532,7 +1548,7 @@ class RouterRuntime:
             pending_capture.selected_weight_kg,
             pending_capture.selected_unit,
             pending_capture.selected_timestamp,
-            pending_capture.changed_tracked_attributes,
+            pending_capture.tracked_attribute_values,
             pending_capture.selected_source_entity_id,
         )
 
@@ -1543,7 +1559,7 @@ class RouterRuntime:
         weight_kg: float,
         unit: str,
         weight_timestamp: datetime,
-        changed_tracked_attributes: set[str],
+        tracked_attribute_values: dict[str, Any],
         source_entity_id: str | None = None,
     ) -> None:
         # Which entity actually provided the winning reading (primary or the
@@ -1602,14 +1618,43 @@ class RouterRuntime:
                     "attributes": dict(entity_state.attributes),
                 }
 
-        for key, val in weight_state.attributes.items():
-            if val is None or str(val).lower() in {"unavailable", "unknown", "none"}:
+        for key, val in tracked_attribute_values.items():
+            if str(key).lower() not in self.tracked_attributes:
                 continue
-            if key.lower() not in self.tracked_attributes:
-                continue
-            if key.lower() not in changed_tracked_attributes:
+            if not _is_usable_attribute_value(val):
                 continue
             raw_data["tracked_attributes"][key] = val
+
+        # Tracked attributes live on the primary source sensor. A burst driven
+        # only by the secondary entity therefore collects none of them, because
+        # the primary emitted no event to read. Fall back to the primary's
+        # current state for the keys still missing, gated by the same freshness
+        # window used for tracked entities so a value left over from an earlier
+        # weigh-in is not recorded.
+        if source_entity_id != self.source_entity_id and self.tracked_attributes:
+            collected = {str(key).lower() for key in raw_data["tracked_attributes"]}
+            missing = self.tracked_attributes - collected
+            if missing:
+                primary_state = self.hass.states.get(self.source_entity_id)
+                fresh = primary_state is not None and _state_changed_within(
+                    primary_state, freshness_start, freshness_end
+                )
+                _LOGGER.debug(
+                    "Secondary-driven capture is missing tracked attributes %s; "
+                    "primary fallback %s. Primary %s",
+                    sorted(missing),
+                    "used" if fresh else "SKIPPED - stale or unavailable",
+                    _describe_state_for_log(
+                        self.source_entity_id, primary_state, dt_util.utcnow()
+                    ),
+                )
+                if fresh:
+                    for key, val in primary_state.attributes.items():
+                        if str(key).lower() not in missing:
+                            continue
+                        if not _is_usable_attribute_value(val):
+                            continue
+                        raw_data["tracked_attributes"][key] = val
 
         measurement = WeightMeasurement(
             weight_kg=weight_kg,
