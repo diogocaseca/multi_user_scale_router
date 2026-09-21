@@ -78,10 +78,12 @@ class PendingMeasurement:
 class PendingCapture:
     """Debounced burst of source updates waiting to be captured.
 
-    ``selected_source`` tracks whether the winning reading so far came from the
-    primary entity or the optional secondary (fallback) entity. Once a primary
-    reading is part of the burst the source becomes ``"primary"`` and never
-    reverts: later secondary readings are ignored entirely.
+    ``selected_source`` records which entity (primary or the optional
+    secondary/fallback) actually contributed the currently winning reading.
+    Neither entity has inherent priority: a reading from either one is
+    compared against the current selection using ``capture_strategy``
+    (highest/lowest), the same rule applied within a single source, and it
+    replaces the selection only if it wins that comparison.
     """
 
     selected_state: Any
@@ -1440,22 +1442,6 @@ class RouterRuntime:
 
         event_timestamp = _state_timestamp_utc(new_state)
 
-        # Secondary readings only drive the capture as a fallback. The moment a
-        # primary reading is part of the burst, the capture is "owned" by the
-        # primary and any secondary reading is ignored — it neither contributes a
-        # value nor resets the settling delay.
-        if (
-            is_secondary
-            and self._pending_capture is not None
-            and self._pending_capture.selected_source == SOURCE_PRIMARY
-        ):
-            _LOGGER.debug(
-                "Ignoring secondary update from %s: primary entity already owns "
-                "the current capture burst",
-                entity_id,
-            )
-            return
-
         if self._pending_capture is None:
             self._pending_capture = PendingCapture(
                 selected_state=new_state,
@@ -1466,33 +1452,14 @@ class RouterRuntime:
                 selected_source_entity_id=entity_id,
                 tracked_attribute_values=dict(changed_tracked_attrs),
             )
-        elif (
-            not is_secondary
-            and self._pending_capture.selected_source == SOURCE_SECONDARY
-        ):
-            # A primary reading arrived during a burst that was, so far, only
-            # driven by the secondary entity. The primary supersedes it: discard
-            # the secondary selection entirely and restart selection from this
-            # primary value (the highest/lowest strategy will then apply among
-            # any further primary readings).
-            _LOGGER.debug(
-                "Primary update from %s supersedes secondary-driven capture; "
-                "discarding secondary reading",
-                entity_id,
-            )
-            self._pending_capture.selected_state = new_state
-            self._pending_capture.selected_weight_kg = weight_kg
-            self._pending_capture.selected_unit = unit
-            self._pending_capture.selected_timestamp = event_timestamp
-            self._pending_capture.selected_source = SOURCE_PRIMARY
-            self._pending_capture.selected_source_entity_id = entity_id
-            self._pending_capture.tracked_attribute_values = dict(changed_tracked_attrs)
         else:
-            # Same source as the current selection (primary↔primary or, while no
-            # primary has appeared, secondary↔secondary). Keep the heaviest (or
-            # lightest, per capture_strategy) value seen so far. The default
-            # "highest" protects the real weigh-in from a trailing "step-off"
-            # value that can arrive before settling_delay expires.
+            # Neither entity has inherent priority: a reading from primary or
+            # secondary is compared against the current selection using the
+            # same capture_strategy applied within a single source — keep the
+            # heaviest (default) or lightest value seen so far in the burst.
+            # This is what stops an implausible reading on one entity (e.g. a
+            # glitched near-zero value) from blindly discarding a good reading
+            # already captured from the other.
             if self.capture_strategy == CAPTURE_STRATEGY_LOWEST:
                 should_replace = weight_kg < (
                     self._pending_capture.selected_weight_kg - 0.01
@@ -1506,6 +1473,7 @@ class RouterRuntime:
                 self._pending_capture.selected_weight_kg = weight_kg
                 self._pending_capture.selected_unit = unit
                 self._pending_capture.selected_timestamp = event_timestamp
+                self._pending_capture.selected_source = source_kind
                 self._pending_capture.selected_source_entity_id = entity_id
 
             self._pending_capture.tracked_attribute_values.update(changed_tracked_attrs)
