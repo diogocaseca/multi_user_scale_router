@@ -743,27 +743,44 @@ class RouterRuntime:
         self,
         measurement: WeightMeasurement,
         candidates: list[MeasurementCandidate],
-    ) -> list[str]:
+    ) -> tuple[list[str], bool]:
+        """Resolve which users a measurement should be routed to.
+
+        Returns ``(user_ids, is_unvetted_fallback)``. ``is_unvetted_fallback``
+        is True when the router found **no** candidate for this weight at all
+        (nobody matched within tolerance, and nobody is a fresh/no-history
+        user) and the list returned is just "every configured/present user" as
+        a last resort — as opposed to a real, weight-based match that location
+        filtering happened to narrow down to one name. Callers must not
+        auto-assign an unvetted fallback result even when it contains exactly
+        one user: that single name was never actually plausible for this
+        weight, only picked because nothing else was left to offer.
+        """
         candidate_user_ids = [candidate.user_id for candidate in candidates]
         filtered_candidates = self._filter_user_ids_by_location(candidate_user_ids)
         if filtered_candidates:
-            return filtered_candidates
+            return filtered_candidates, False
         if candidate_user_ids:
-            return candidate_user_ids
+            return candidate_user_ids, False
 
         all_user_ids = [user.user_id for user in self.users]
         if not all_user_ids:
-            return []
+            return [], True
 
         filtered_all_users = self._filter_user_ids_by_location(all_user_ids)
         if filtered_all_users:
-            return filtered_all_users
+            _LOGGER.debug(
+                "No routed candidates found for measurement %s, falling back to "
+                "present configured users",
+                measurement.measurement_id,
+            )
+            return filtered_all_users, True
 
         _LOGGER.debug(
             "No routed candidates found for measurement %s, falling back to all configured users",
             measurement.measurement_id,
         )
-        return all_user_ids
+        return all_user_ids, True
 
     def _store_pending_measurement(
         self,
@@ -1632,11 +1649,19 @@ class RouterRuntime:
             raw=raw_data,
         )
         candidates = self.router.evaluate_measurement(measurement)
-        resolved_user_ids = self._resolve_candidate_user_ids(measurement, candidates)
+        resolved_user_ids, is_unvetted_fallback = self._resolve_candidate_user_ids(
+            measurement, candidates
+        )
 
-        if len(resolved_user_ids) == 1:
+        # A single remaining name only justifies auto-assigning without asking
+        # when it is a real match (weight-based, or narrowed there by location
+        # filtering among real matches). When nobody matched this weight at
+        # all and the single name is just "whoever is left" from the fallback,
+        # that is exactly the implausible-reading case that must be confirmed
+        # by the user instead of silently written to their history.
+        if len(resolved_user_ids) == 1 and not is_unvetted_fallback:
             self.record_measurement_for_user(resolved_user_ids[0], measurement)
-        elif len(resolved_user_ids) > 1:
+        elif resolved_user_ids:
             self._store_pending_measurement(measurement, candidates, resolved_user_ids)
 
         self._notify()
