@@ -426,11 +426,22 @@ class RouterRuntime:
 
     @property
     def device_id(self) -> str | None:
-        device_registry = dr.async_get(self.hass)
-        device_entry = device_registry.async_get_device(
-            identifiers={(DOMAIN, self.entry_id)}
-        )
+        device_entry = self.async_get_device_entry()
         return device_entry.id if device_entry is not None else None
+
+    def async_get_device_entry(self) -> dr.DeviceEntry | None:
+        """Return this config entry's router device from the device registry.
+
+        HA 2026.8 made device identifiers unique per config entry only and
+        deprecated DeviceRegistry.async_get_device, so the per-entry lookup is
+        used when the core has it. Older cores (this integration supports HA
+        2024.1+) only have the global lookup.
+        """
+        device_reg = dr.async_get(self.hass)
+        identifier = (DOMAIN, self.entry_id)
+        if not hasattr(device_reg, "async_get_device_by_identifier"):
+            return device_reg.async_get_device(identifiers={identifier})
+        return device_reg.async_get_device_by_identifier(identifier, self.entry_id)
 
     @property
     def source_entity(self) -> str:
@@ -1059,11 +1070,7 @@ class RouterRuntime:
             return
 
         pending = self._pending_measurements[measurement_id]
-        device_reg = dr.async_get(self.hass)
-        device_entry = device_reg.async_get_device(
-            identifiers={(DOMAIN, self.entry_id)}
-        )
-        device_id = device_entry.id if device_entry else "unknown"
+        device_id = self.device_id or "unknown"
 
         candidate_lines = []
         for candidate in pending.candidate_details:

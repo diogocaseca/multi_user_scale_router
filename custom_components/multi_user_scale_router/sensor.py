@@ -13,9 +13,9 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 
-from .const import DATA_ROUTER, DOMAIN
+from .const import DATA_ROUTER, DOMAIN, MAX_EXPOSED_HISTORY_ITEMS
 
 
 def _weight_to_display(value: float | None) -> float | None:
@@ -31,7 +31,11 @@ class RouterUserWeightSensor(SensorEntity):
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_should_poll = False
     _attr_has_entity_name = True
-    _attr_force_update = True
+
+    # The history array would be re-recorded on every weigh-in, churning
+    # database rows — and past the recorder's 16 KB attribute limit it would
+    # make the recorder store {} for ALL of the state's attributes.
+    _unrecorded_attributes = frozenset({"weight_history"})
 
     def __init__(self, runtime: Any, user_id: str, display_name: str) -> None:
         self._runtime = runtime
@@ -44,7 +48,30 @@ class RouterUserWeightSensor(SensorEntity):
             manufacturer="Multi-User Scale Router",
             model="Multi-User Router",
         )
-        runtime.add_listener(self.async_write_ha_state)
+        self._last_render_key = self._render_key()
+        runtime.add_listener(self._handle_runtime_update)
+
+    def _render_key(self) -> tuple[str, list[str]]:
+        """Everything the state and attributes are derived from.
+
+        The runtime notifies on any change (pending queue, moved metrics, ...),
+        most of which cannot alter this sensor, so only a change here is
+        worth a state write. The display unit is part of the key because the
+        state and the history attribute are both rendered in it.
+        """
+        history = self._runtime.router.get_user_history(self._user_id)
+        return (
+            self._runtime.display_unit,
+            [m.measurement_id for m in history[-MAX_EXPOSED_HISTORY_ITEMS:]],
+        )
+
+    @callback
+    def _handle_runtime_update(self) -> None:
+        render_key = self._render_key()
+        if render_key == self._last_render_key:
+            return
+        self._last_render_key = render_key
+        self.async_write_ha_state()
 
     @property
     def native_value(self) -> float | None:
@@ -65,7 +92,7 @@ class RouterUserWeightSensor(SensorEntity):
         display_unit = self._runtime.display_unit
         is_pounds = display_unit == "lb"
         weight_history = []
-        for measurement in history[-20:]:
+        for measurement in history[-MAX_EXPOSED_HISTORY_ITEMS:]:
             display_measurement = {
                 "measurement_id": measurement.measurement_id,
                 "timestamp": measurement.timestamp.isoformat(),
@@ -89,7 +116,7 @@ class RouterUserWeightSensor(SensorEntity):
         return attrs
 
     async def async_will_remove_from_hass(self) -> None:
-        self._runtime.remove_listener(self.async_write_ha_state)
+        self._runtime.remove_listener(self._handle_runtime_update)
 
 
 class RouterPendingSensor(SensorEntity):
@@ -188,7 +215,6 @@ class RouterUserTrackedEntitySensor(SensorEntity):
 
     _attr_should_poll = False
     _attr_has_entity_name = True
-    _attr_force_update = True
 
     def __init__(
         self, runtime: Any, user_id: str, display_name: str, source_entity_id: str
@@ -252,7 +278,31 @@ class RouterUserTrackedEntitySensor(SensorEntity):
             manufacturer="Multi-User Scale Router",
             model="Multi-User Router",
         )
-        runtime.add_listener(self.async_write_ha_state)
+        self._last_render_key = self._render_key()
+        runtime.add_listener(self._handle_runtime_update)
+
+    def _render_key(self) -> tuple[str | None, Any]:
+        """Measurement and value the state is currently derived from.
+
+        A new weigh-in that carries this metric changes the measurement id even
+        when the value repeats, so it is still recorded; a weigh-in that lacks
+        the metric leaves the key untouched and costs no state write.
+        """
+        measurement = self._latest_measurement_with_metric()
+        return (
+            measurement.measurement_id if measurement is not None else None,
+            self.native_value,
+        )
+
+    @callback
+    def _handle_runtime_update(self) -> None:
+        render_key = self._render_key()
+        if render_key == self._last_render_key:
+            return
+        self._last_render_key = render_key
+        # Force the write so a repeated value on a new weigh-in is still recorded.
+        self._attr_force_update = True
+        self.async_write_ha_state()
 
     def _latest_measurement_with_metric(self):
         """Return newest measurement in history that contains this tracked entity."""
@@ -290,7 +340,7 @@ class RouterUserTrackedEntitySensor(SensorEntity):
         }
 
     async def async_will_remove_from_hass(self) -> None:
-        self._runtime.remove_listener(self.async_write_ha_state)
+        self._runtime.remove_listener(self._handle_runtime_update)
 
 
 class RouterUserTrackedAttributeSensor(SensorEntity):
@@ -298,7 +348,6 @@ class RouterUserTrackedAttributeSensor(SensorEntity):
 
     _attr_should_poll = False
     _attr_has_entity_name = True
-    _attr_force_update = True
 
     def __init__(
         self, runtime: Any, user_id: str, display_name: str, attribute_key: str
@@ -365,7 +414,31 @@ class RouterUserTrackedAttributeSensor(SensorEntity):
             if source_state:
                 self._attr_icon = source_state.attributes.get("icon")
 
-        runtime.add_listener(self.async_write_ha_state)
+        self._last_render_key = self._render_key()
+        runtime.add_listener(self._handle_runtime_update)
+
+    def _render_key(self) -> tuple[str | None, Any]:
+        """Measurement and value the state is currently derived from.
+
+        A new weigh-in that carries this metric changes the measurement id even
+        when the value repeats, so it is still recorded; a weigh-in that lacks
+        the metric leaves the key untouched and costs no state write.
+        """
+        measurement = self._latest_measurement_with_metric()
+        return (
+            measurement.measurement_id if measurement is not None else None,
+            self.native_value,
+        )
+
+    @callback
+    def _handle_runtime_update(self) -> None:
+        render_key = self._render_key()
+        if render_key == self._last_render_key:
+            return
+        self._last_render_key = render_key
+        # Force the write so a repeated value on a new weigh-in is still recorded.
+        self._attr_force_update = True
+        self.async_write_ha_state()
 
     def _latest_measurement_with_metric(self):
         """Return newest measurement in history that contains this tracked attribute."""
@@ -400,7 +473,7 @@ class RouterUserTrackedAttributeSensor(SensorEntity):
         }
 
     async def async_will_remove_from_hass(self) -> None:
-        self._runtime.remove_listener(self.async_write_ha_state)
+        self._runtime.remove_listener(self._handle_runtime_update)
 
 
 async def async_setup_entry(
