@@ -111,7 +111,9 @@ class RouterUserWeightSensor(SensorEntity):
         measurement = self._runtime.router.get_user_last_measurement(self._user_id)
         if measurement is not None:
             attrs["measurement_id"] = measurement.measurement_id
-            attrs["source_entity_id"] = self._runtime.source_entity_id
+            attrs["source_entity_id"] = (
+                measurement.source_id or self._runtime.source_entity_id
+            )
 
         return attrs
 

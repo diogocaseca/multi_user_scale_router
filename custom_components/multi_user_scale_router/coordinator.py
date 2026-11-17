@@ -53,10 +53,6 @@ from multi_user_scale_core import (
 
 _LOGGER = logging.getLogger(__name__)
 
-# Which entity contributed the winning reading in a capture burst.
-SOURCE_PRIMARY = "primary"
-SOURCE_SECONDARY = "secondary"
-
 
 def _norm_country_code(config: Any) -> str:
     """Extract normalized 2-letter country code from HA config."""
@@ -75,28 +71,35 @@ class PendingMeasurement:
 
 
 @dataclass
+class CaptureReading:
+    """One weight reading kept for a capture burst."""
+
+    state: Any
+    weight_kg: float
+    unit: str
+    timestamp: datetime
+    source_entity_id: str
+
+
+@dataclass
 class PendingCapture:
     """Debounced burst of source updates waiting to be captured.
 
-    ``selected_source`` records which entity (primary or the optional
-    secondary/fallback) actually contributed the currently winning reading.
-    Neither entity has inherent priority: a reading from either one is
-    compared against the current selection using ``capture_strategy``
-    (highest/lowest), the same rule applied within a single source, and it
-    replaces the selection only if it wins that comparison.
+    The best reading of each source is kept separately: ``capture_strategy``
+    (highest/lowest) picks among readings of the *same* entity, and
+    ``RouterRuntime._select_capture_reading`` decides between the two at
+    capture time. The primary is the scale's stabilized value, while the
+    optional secondary (non-stabilized) entity emits every intermediate value
+    of the weigh-in, so its peak can sit above the real weight.
     """
 
-    selected_state: Any
-    selected_weight_kg: float
-    selected_unit: str
-    selected_timestamp: datetime
-    selected_source: str
-    selected_source_entity_id: str
+    primary: CaptureReading | None = None
+    secondary: CaptureReading | None = None
     # Latest value seen for each tracked attribute that changed during the
     # burst, accumulated across every accepted update. It is deliberately not
-    # read off ``selected_state``: the winning reading (heaviest/lightest) is
-    # often the step-on impact, which lands before the scale has computed its
-    # derived metrics.
+    # read off the selected reading: the winning reading (heaviest/lightest)
+    # is often the step-on impact, which lands before the scale has computed
+    # its derived metrics.
     tracked_attribute_values: dict[str, Any] = field(default_factory=dict)
 
 
@@ -1400,7 +1403,6 @@ class RouterRuntime:
             self.secondary_source_entity_id is not None
             and entity_id == self.secondary_source_entity_id
         )
-        source_kind = SOURCE_SECONDARY if is_secondary else SOURCE_PRIMARY
 
         if old_state is None:
             _LOGGER.debug(
@@ -1467,40 +1469,27 @@ class RouterRuntime:
         event_timestamp = _state_timestamp_utc(new_state)
 
         if self._pending_capture is None:
-            self._pending_capture = PendingCapture(
-                selected_state=new_state,
-                selected_weight_kg=weight_kg,
-                selected_unit=unit,
-                selected_timestamp=event_timestamp,
-                selected_source=source_kind,
-                selected_source_entity_id=entity_id,
-                tracked_attribute_values=dict(changed_tracked_attrs),
-            )
-        else:
-            # Neither entity has inherent priority: a reading from primary or
-            # secondary is compared against the current selection using the
-            # same capture_strategy applied within a single source — keep the
-            # heaviest (default) or lightest value seen so far in the burst.
-            # This is what stops an implausible reading on one entity (e.g. a
-            # glitched near-zero value) from blindly discarding a good reading
-            # already captured from the other.
-            if self.capture_strategy == CAPTURE_STRATEGY_LOWEST:
-                should_replace = weight_kg < (
-                    self._pending_capture.selected_weight_kg - 0.01
-                )
-            else:
-                should_replace = weight_kg > (
-                    self._pending_capture.selected_weight_kg + 0.01
-                )
-            if should_replace:
-                self._pending_capture.selected_state = new_state
-                self._pending_capture.selected_weight_kg = weight_kg
-                self._pending_capture.selected_unit = unit
-                self._pending_capture.selected_timestamp = event_timestamp
-                self._pending_capture.selected_source = source_kind
-                self._pending_capture.selected_source_entity_id = entity_id
+            self._pending_capture = PendingCapture()
+        capture = self._pending_capture
 
-            self._pending_capture.tracked_attribute_values.update(changed_tracked_attrs)
+        reading = CaptureReading(
+            state=new_state,
+            weight_kg=weight_kg,
+            unit=unit,
+            timestamp=event_timestamp,
+            source_entity_id=entity_id,
+        )
+        # Within one entity, keep the heaviest (default) or lightest reading of
+        # the burst. The default "highest" protects the real weigh-in from a
+        # trailing "step-off" value that can arrive before settling_delay
+        # expires. Which entity wins overall is decided at capture time.
+        if is_secondary:
+            if self._reading_replaces(capture.secondary, weight_kg):
+                capture.secondary = reading
+        elif self._reading_replaces(capture.primary, weight_kg):
+            capture.primary = reading
+
+        capture.tracked_attribute_values.update(changed_tracked_attrs)
 
         _LOGGER.debug(
             "Source update accepted for %s: %s -> %s kg (unit=%s); "
@@ -1535,14 +1524,73 @@ class RouterRuntime:
         if pending_capture is None:
             return
 
+        reading = self._select_capture_reading(pending_capture)
         self._async_capture_and_route(
-            pending_capture.selected_state,
-            pending_capture.selected_weight_kg,
-            pending_capture.selected_unit,
-            pending_capture.selected_timestamp,
+            reading.state,
+            reading.weight_kg,
+            reading.unit,
+            reading.timestamp,
             pending_capture.tracked_attribute_values,
-            pending_capture.selected_source_entity_id,
+            reading.source_entity_id,
         )
+
+    def _reading_replaces(
+        self, current: CaptureReading | None, weight_kg: float
+    ) -> bool:
+        """Whether a new reading beats the kept one under capture_strategy."""
+        if current is None:
+            return True
+        if self.capture_strategy == CAPTURE_STRATEGY_LOWEST:
+            return weight_kg < current.weight_kg - 0.01
+        return weight_kg > current.weight_kg + 0.01
+
+    def _matches_user_history(self, reading: CaptureReading) -> bool:
+        """Whether a reading is within some user's tolerance of their history."""
+        probe = WeightMeasurement(
+            weight_kg=reading.weight_kg,
+            timestamp=reading.timestamp,
+            source_id=reading.source_entity_id,
+            source_unit=reading.unit,
+            raw={},
+        )
+        return any(
+            candidate.reference_weight_kg is not None
+            for candidate in self.router.evaluate_measurement(probe)
+        )
+
+    def _select_capture_reading(self, capture: PendingCapture) -> CaptureReading:
+        """Choose the reading to record when the burst settles.
+
+        The primary is the scale's stabilized value and wins whenever it
+        exists. The secondary (non-stabilized) stream only overrides it when
+        the two disagree by more than the router's minimum tolerance *and* the
+        primary is implausible against every user's history while the
+        secondary is not — e.g. a bogus near-zero stabilized reading after the
+        real weight only came through the secondary.
+        """
+        primary, secondary = capture.primary, capture.secondary
+        if primary is None:
+            return secondary
+        if secondary is None:
+            return primary
+
+        gap = abs(primary.weight_kg - secondary.weight_kg)
+        if gap <= self.router.config.min_tolerance_kg:
+            return primary
+
+        if self._matches_user_history(secondary) and not self._matches_user_history(
+            primary
+        ):
+            _LOGGER.debug(
+                "Primary reading %.2f kg is implausible against user history and "
+                "disagrees with secondary %.2f kg by %.2f kg; using secondary",
+                primary.weight_kg,
+                secondary.weight_kg,
+                gap,
+            )
+            return secondary
+
+        return primary
 
     @callback
     def _async_capture_and_route(
