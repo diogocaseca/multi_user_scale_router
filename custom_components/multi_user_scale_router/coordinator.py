@@ -40,6 +40,7 @@ from .const import (
     MAX_PENDING_MEASUREMENTS,
     CONF_METRIC_FRESHNESS_WINDOW,
     CONF_SETTLING_DELAY,
+    SECONDARY_COOLDOWN_SECONDS,
     SYSTEM_ATTRIBUTES,
 )
 from multi_user_scale_core import (
@@ -95,6 +96,7 @@ class PendingCapture:
 
     primary: CaptureReading | None = None
     secondary: CaptureReading | None = None
+    first_event_at: datetime | None = None
     # Latest value seen for each tracked attribute that changed during the
     # burst, accumulated across every accepted update. It is deliberately not
     # read off the selected reading: the winning reading (heaviest/lightest)
@@ -197,6 +199,19 @@ def _safe_float(value: Any) -> float | None:
 def _state_timestamp_utc(state: Any) -> datetime:
     """Best-effort UTC timestamp for a Home Assistant State object."""
     for attr in ("last_updated", "last_changed"):
+        value = getattr(state, attr, None)
+        if isinstance(value, datetime):
+            return dt_util.as_utc(value)
+    return dt_util.utcnow()
+
+
+def _state_reported_utc(state: Any) -> datetime:
+    """UTC time the state was last written, even when its value did not change.
+
+    ``last_reported`` also advances when an entity re-reports an unchanged
+    value (no state_changed event is fired for that); older cores lack it.
+    """
+    for attr in ("last_reported", "last_updated", "last_changed"):
         value = getattr(state, attr, None)
         if isinstance(value, datetime):
             return dt_util.as_utc(value)
@@ -422,6 +437,7 @@ class RouterRuntime:
 
         self._async_capture_cancel: Callable[[], None] | None = None
         self._pending_capture: PendingCapture | None = None
+        self._secondary_ignored_until: datetime | None = None
 
     @property
     def title(self) -> str:
@@ -1468,8 +1484,22 @@ class RouterRuntime:
 
         event_timestamp = _state_timestamp_utc(new_state)
 
+        if (
+            is_secondary
+            and self._pending_capture is None
+            and self._secondary_ignored_until is not None
+            and dt_util.utcnow() < self._secondary_ignored_until
+        ):
+            _LOGGER.debug(
+                "Ignoring secondary update from %s: still within %.0fs of the "
+                "previous weigh-in, treating it as the same weigh-in winding down",
+                entity_id,
+                SECONDARY_COOLDOWN_SECONDS,
+            )
+            return
+
         if self._pending_capture is None:
-            self._pending_capture = PendingCapture()
+            self._pending_capture = PendingCapture(first_event_at=event_timestamp)
         capture = self._pending_capture
 
         reading = CaptureReading(
@@ -1524,7 +1554,14 @@ class RouterRuntime:
         if pending_capture is None:
             return
 
+        if pending_capture.primary is None:
+            pending_capture.primary = self._current_primary_reading(pending_capture)
+
         reading = self._select_capture_reading(pending_capture)
+        if pending_capture.primary is not None:
+            self._secondary_ignored_until = dt_util.utcnow() + timedelta(
+                seconds=SECONDARY_COOLDOWN_SECONDS
+            )
         self._async_capture_and_route(
             reading.state,
             reading.weight_kg,
@@ -1532,6 +1569,49 @@ class RouterRuntime:
             reading.timestamp,
             pending_capture.tracked_attribute_values,
             reading.source_entity_id,
+        )
+
+    def _current_primary_reading(
+        self, capture: PendingCapture
+    ) -> CaptureReading | None:
+        """Primary's value when it re-reported during this burst without changing.
+
+        When the stabilized weight equals the previous weigh-in's, Home
+        Assistant fires no state_changed for the primary, so the burst holds
+        only the secondary stream (whose peak can sit above the real weight).
+        The primary's ``last_reported`` still advances, which tells us the
+        scale did report its stabilized value during this weigh-in.
+        """
+        states = getattr(self.hass, "states", None)
+        if states is None or capture.first_event_at is None:
+            return None
+        state = states.get(self.source_entity_id)
+        if state is None or state.state in {"unavailable", "unknown", "none", "None"}:
+            return None
+        reported = _state_reported_utc(state)
+        if reported < capture.first_event_at or reported > dt_util.utcnow() + timedelta(
+            seconds=0.5
+        ):
+            return None
+        value = _safe_float(state.state)
+        if value is None:
+            return None
+        unit = state.attributes.get("unit_of_measurement", "kg")
+        weight_kg = _convert_to_kg(value, unit)
+        if weight_kg is None:
+            return None
+        _LOGGER.debug(
+            "Primary %s re-reported %.2f kg during this weigh-in without a state "
+            "change; using it as the stabilized reading",
+            self.source_entity_id,
+            weight_kg,
+        )
+        return CaptureReading(
+            state=state,
+            weight_kg=weight_kg,
+            unit=unit,
+            timestamp=reported,
+            source_entity_id=self.source_entity_id,
         )
 
     def _reading_replaces(

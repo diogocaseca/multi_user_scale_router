@@ -103,6 +103,7 @@ class RouterUserWeightSensor(SensorEntity):
                     2,
                 ),
                 "weight_unit": display_unit,
+                "source_entity_id": measurement.source_id,
             }
             weight_history.append(display_measurement)
 

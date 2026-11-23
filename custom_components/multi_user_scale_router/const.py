@@ -82,3 +82,8 @@ DEFAULT_METRIC_FRESHNESS_WINDOW = DEFAULT_SETTLING_DELAY + DEFAULT_FRESHNESS_SLA
 DEFAULT_CAPTURE_STRATEGY = CAPTURE_STRATEGY_HIGHEST
 MAX_PENDING_MEASUREMENTS = 10
 MAX_EXPOSED_HISTORY_ITEMS = 20
+# After a weigh-in in which the primary entity took part, readings that arrive
+# only on the secondary entity are ignored for this long. The scale keeps
+# streaming non-stabilized values while the person stays on it (impedance) and
+# steps off, and those must not become a second measurement.
+SECONDARY_COOLDOWN_SECONDS = 60.0
