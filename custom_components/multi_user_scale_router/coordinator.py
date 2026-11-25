@@ -14,6 +14,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfMass
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_call_later, async_track_state_change_event
 from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_conversion import MassConverter
@@ -53,6 +54,8 @@ from multi_user_scale_core import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+_MAX_SECONDARY_READINGS = 500
 
 
 def _norm_country_code(config: Any) -> str:
@@ -96,7 +99,10 @@ class PendingCapture:
 
     primary: CaptureReading | None = None
     secondary: CaptureReading | None = None
-    first_event_at: datetime | None = None
+    # Every secondary reading of the burst, in arrival order, so the value the
+    # stream held when the scale flagged "stabilized" can be recovered.
+    secondary_readings: list[CaptureReading] = field(default_factory=list)
+    stabilized_at: datetime | None = None
     # Latest value seen for each tracked attribute that changed during the
     # burst, accumulated across every accepted update. It is deliberately not
     # read off the selected reading: the winning reading (heaviest/lightest)
@@ -199,19 +205,6 @@ def _safe_float(value: Any) -> float | None:
 def _state_timestamp_utc(state: Any) -> datetime:
     """Best-effort UTC timestamp for a Home Assistant State object."""
     for attr in ("last_updated", "last_changed"):
-        value = getattr(state, attr, None)
-        if isinstance(value, datetime):
-            return dt_util.as_utc(value)
-    return dt_util.utcnow()
-
-
-def _state_reported_utc(state: Any) -> datetime:
-    """UTC time the state was last written, even when its value did not change.
-
-    ``last_reported`` also advances when an entity re-reports an unchanged
-    value (no state_changed event is fired for that); older cores lack it.
-    """
-    for attr in ("last_reported", "last_updated", "last_changed"):
         value = getattr(state, attr, None)
         if isinstance(value, datetime):
             return dt_util.as_utc(value)
@@ -438,6 +431,7 @@ class RouterRuntime:
         self._async_capture_cancel: Callable[[], None] | None = None
         self._pending_capture: PendingCapture | None = None
         self._secondary_ignored_until: datetime | None = None
+        self.stabilized_entity_id: str | None = None
 
     @property
     def title(self) -> str:
@@ -603,11 +597,47 @@ class RouterRuntime:
             return
         if not self._router_state_recovered:
             self.persist_router_state()
+        self.stabilized_entity_id = self._discover_stabilized_entity_id()
+        tracked = list(self.source_entity_ids)
+        if self.stabilized_entity_id is not None:
+            tracked.append(self.stabilized_entity_id)
         self._unsub_state = async_track_state_change_event(
             self.hass,
-            self.source_entity_ids,
+            tracked,
             self._async_handle_source_update,
         )
+
+    def _discover_stabilized_entity_id(self) -> str | None:
+        """Find the scale's "stabilized" binary sensor on the source's device.
+
+        Only meaningful with a secondary (non-stabilized) entity. Scales such as
+        the Xiaomi Mi Body Composition Scale expose a binary sensor that turns on
+        when the weight stabilizes; the stream value at that instant is the real
+        weight, even when the primary reports nothing because it did not change.
+        """
+        if self.secondary_source_entity_id is None:
+            return None
+        try:
+            registry = er.async_get(self.hass)
+            primary_entry = registry.async_get(self.source_entity_id)
+            if primary_entry is None or primary_entry.device_id is None:
+                return None
+            for entry in er.async_entries_for_device(registry, primary_entry.device_id):
+                if entry.domain != "binary_sensor" or entry.disabled_by is not None:
+                    continue
+                label = " ".join(
+                    str(part)
+                    for part in (entry.entity_id, entry.original_name, entry.name)
+                    if part
+                ).lower()
+                if "stabiliz" in label:
+                    _LOGGER.debug(
+                        "Using %s as the stabilization indicator", entry.entity_id
+                    )
+                    return entry.entity_id
+        except Exception as error:  # defensive: partial registries in tests/older cores
+            _LOGGER.debug("Stabilization indicator lookup failed: %s", error)
+        return None
 
     def async_unload(self) -> None:
         if self._unsub_state:
@@ -1415,6 +1445,12 @@ class RouterRuntime:
         old_state = event.data.get("old_state")
 
         entity_id = event.data.get("entity_id") or self.source_entity_id
+        if (
+            self.stabilized_entity_id is not None
+            and entity_id == self.stabilized_entity_id
+        ):
+            self._async_handle_stabilized_update(event)
+            return
         is_secondary = (
             self.secondary_source_entity_id is not None
             and entity_id == self.secondary_source_entity_id
@@ -1499,7 +1535,7 @@ class RouterRuntime:
             return
 
         if self._pending_capture is None:
-            self._pending_capture = PendingCapture(first_event_at=event_timestamp)
+            self._pending_capture = PendingCapture()
         capture = self._pending_capture
 
         reading = CaptureReading(
@@ -1514,6 +1550,8 @@ class RouterRuntime:
         # trailing "step-off" value that can arrive before settling_delay
         # expires. Which entity wins overall is decided at capture time.
         if is_secondary:
+            if len(capture.secondary_readings) < _MAX_SECONDARY_READINGS:
+                capture.secondary_readings.append(reading)
             if self._reading_replaces(capture.secondary, weight_kg):
                 capture.secondary = reading
         elif self._reading_replaces(capture.primary, weight_kg):
@@ -1554,11 +1592,11 @@ class RouterRuntime:
         if pending_capture is None:
             return
 
-        if pending_capture.primary is None:
-            pending_capture.primary = self._current_primary_reading(pending_capture)
-
         reading = self._select_capture_reading(pending_capture)
-        if pending_capture.primary is not None:
+        if (
+            pending_capture.primary is not None
+            or pending_capture.stabilized_at is not None
+        ):
             self._secondary_ignored_until = dt_util.utcnow() + timedelta(
                 seconds=SECONDARY_COOLDOWN_SECONDS
             )
@@ -1571,48 +1609,27 @@ class RouterRuntime:
             reading.source_entity_id,
         )
 
-    def _current_primary_reading(
-        self, capture: PendingCapture
-    ) -> CaptureReading | None:
-        """Primary's value when it re-reported during this burst without changing.
+    @callback
+    def _async_handle_stabilized_update(self, event: Event) -> None:
+        """Remember when the scale flagged the weight as stabilized."""
+        new_state = event.data.get("new_state")
+        old_state = event.data.get("old_state")
+        if new_state is None or old_state is None:
+            return
+        if str(new_state.state).lower() != "on" or str(old_state.state).lower() == "on":
+            return
+        capture = self._pending_capture
+        if capture is not None:
+            capture.stabilized_at = _state_timestamp_utc(new_state)
 
-        When the stabilized weight equals the previous weigh-in's, Home
-        Assistant fires no state_changed for the primary, so the burst holds
-        only the secondary stream (whose peak can sit above the real weight).
-        The primary's ``last_reported`` still advances, which tells us the
-        scale did report its stabilized value during this weigh-in.
-        """
-        states = getattr(self.hass, "states", None)
-        if states is None or capture.first_event_at is None:
+    @staticmethod
+    def _settled_secondary_reading(capture: PendingCapture) -> CaptureReading | None:
+        """Stream value at the moment the scale reported "stabilized"."""
+        if capture.stabilized_at is None:
             return None
-        state = states.get(self.source_entity_id)
-        if state is None or state.state in {"unavailable", "unknown", "none", "None"}:
-            return None
-        reported = _state_reported_utc(state)
-        if reported < capture.first_event_at or reported > dt_util.utcnow() + timedelta(
-            seconds=0.5
-        ):
-            return None
-        value = _safe_float(state.state)
-        if value is None:
-            return None
-        unit = state.attributes.get("unit_of_measurement", "kg")
-        weight_kg = _convert_to_kg(value, unit)
-        if weight_kg is None:
-            return None
-        _LOGGER.debug(
-            "Primary %s re-reported %.2f kg during this weigh-in without a state "
-            "change; using it as the stabilized reading",
-            self.source_entity_id,
-            weight_kg,
-        )
-        return CaptureReading(
-            state=state,
-            weight_kg=weight_kg,
-            unit=unit,
-            timestamp=reported,
-            source_entity_id=self.source_entity_id,
-        )
+        limit = capture.stabilized_at + timedelta(seconds=0.5)
+        settled = [r for r in capture.secondary_readings if r.timestamp <= limit]
+        return settled[-1] if settled else None
 
     def _reading_replaces(
         self, current: CaptureReading | None, weight_kg: float
@@ -1650,7 +1667,7 @@ class RouterRuntime:
         """
         primary, secondary = capture.primary, capture.secondary
         if primary is None:
-            return secondary
+            return self._settled_secondary_reading(capture) or secondary
         if secondary is None:
             return primary
 
